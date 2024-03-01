@@ -14,11 +14,11 @@ import {
   ModelFeedURL,
   CrawledSourcePlaceholder,
   CrawledTextPlaceholder,
-  EndpointConversation,
   ExportFilePrefix,
   ExportHeaderPrefix,
   LanguageFeedURL,
   PromptPlaceholder,
+  PromptPlaceholder1,
   TargetLanguagePlaceholder,
   VariablePlaceholder,
   VariableDefinition,
@@ -31,6 +31,7 @@ import {
   ValidateVariableMaxCount,
   ValidateVariablePlaceholder,
   ValidateVariableDefinition,
+  AuxIndexLookupDefinition,
 } from './config.js';
 
 /* eslint-disable no-unused-vars */
@@ -46,10 +47,12 @@ import {
   UserLevelNo,
   ItemStatusNo,
   PromptFeatureBitset,
-  ExternalSystemNo,
+  SystemNo,
   ModelStatusNo,
   LayoutChangeType,
   CreatePromptMode,
+  LicenseWarningLevelNo,
+  GizmoVoteTypeNo,
 } from './enums.js';
 /* eslint-enable */
 
@@ -72,6 +75,8 @@ import {
 
 import { MultiselectDropdown } from './multiselect-dropdown.js';
 import { PromptBuilder } from './prompt-builder.js';
+import { Referrals } from './referrals.js';
+import { VERSION } from './version.js';
 
 /**
  * @typedef {Object} PromptVariable
@@ -105,6 +110,8 @@ import { PromptBuilder } from './prompt-builder.js';
  * @property {boolean} [IsVerified]
  * @property {PromptVariable[]} [PromptVariables]
  * @property {string[]} [ModelS]
+ * @property {string[]} [PluginS]
+ * @property {boolean} [IsGizmoStarterPrompt]
  */
 
 /** @typedef {{langcode: string, languageEnglish: string, languageLabel: string}} Language */
@@ -125,6 +132,37 @@ import { PromptBuilder } from './prompt-builder.js';
 
 /** @typedef {{EnumMaxSizeError: boolean, Errors: string[]}} ValidatePromptVariablesResult */
 
+/**
+ * @typedef {Object} Gizmo
+ * @property {string} GizmoID
+ * @property {string} GizmoCode
+ * @property {string} Title
+ * @property {string} Description
+ * @property {string} LogoURL
+ * @property {string} ShortURL
+ * @property {string} ShareRecipient
+ * @property {string} AuthorDisplayName
+ * @property {string} AuthorDisplayNo
+ * @property {string} AuthorVerifiedNo
+ * @property {string} ModelCode
+ * @property {string} ModelSlug
+ * @property {string[]} CategoryAuto
+ * @property {string[]} CategoryS
+ * @property {string[]} PromptStarterS
+ * @property {string[]} TagS
+ * @property {string[]} ToolsEnabledS
+ * @property {number} CountUses
+ * @property {number} CountViews
+ * @property {number} CountVotes
+ */
+
+/**
+ * @typedef {Object} CurrentGizmo
+ * @property {string} GizmoCode
+ * @property {string} Title
+ * @property {Prompt[]} PromptStarterS
+ */
+
 const DefaultPromptActivity = 'all';
 const DefaultPromptTopic = 'all';
 const DefaultTargetLanguage = 'English*';
@@ -134,6 +172,7 @@ const lastPromptTopicKey = 'lastPromptTopic';
 const lastPromptModelKey = 'lastPromptModel';
 const lastTargetLanguageKey = 'lastTargetLanguage';
 const lastPageSizeKey = 'lastPageSize';
+const lastGizmoPageSizeKey = 'lastGizmoPageSize';
 const lastPromptTemplateTypeKey = 'lastPromptTemplateType';
 const lastListIDKey = 'lastListID';
 const lastCreatePromptModeKey = 'lastCreatePromptMode';
@@ -142,10 +181,13 @@ const myProfileMessageKey = 'myProfileMessageAIPRM';
 const hideWatermarkKey = 'AIPRM_hideWatermark';
 const includeMyProfileInfoKey = 'AIPRM_includeMyProfileInfo';
 const selectedMyProfileInfoKey = 'AIPRM_selectedMyProfileInfoKey';
+const licenseWarningDismissedKey = 'AIPRM_licenseWarningDismissed';
+const lastSeenStaticMessageKey = 'AIPRM_lastSeenStaticMessage';
 
 const queryParamPromptID = 'AIPRM_PromptID';
 const queryParamVariable = 'AIPRM_VARIABLE';
 const queryParamPrompt = 'AIPRM_Prompt';
+const queryParamSearchTerm = 'AIPRM_Search';
 
 // The number of prompts per page in the prompt templates section
 const pageSizeOptions = [4, 8, 12, 16, 20];
@@ -238,11 +280,17 @@ window.AIPRM = {
   /** @type {SortModeNo} */
   PromptSortMode: SortModeNo.TOP_VOTES_TRENDING,
 
+  /** @type {SortModeNo} */
+  GizmoSortMode: SortModeNo.TOP_VOTES_TRENDING,
+
   // Set default model
   PromptModel: localStorage.getItem(lastPromptModelKey) || DefaultPromptModel,
 
   // Set default search query
   PromptSearch: '',
+
+  // Set default gizmo search query
+  GizmoSearch: '',
 
   // Set default prompt templates type
   /** @type {PromptTemplatesType} */
@@ -257,6 +305,9 @@ window.AIPRM = {
 
   /** @type {Prompt[]} */
   PromptTemplates: [],
+
+  /** @type {Gizmo[]} */
+  Gizmos: [],
 
   /** @type {Prompt[]} */
   OwnPrompts: [],
@@ -285,6 +336,9 @@ window.AIPRM = {
   /** @type {Model[]} */
   ModelsActive: [],
 
+  /** @type {string[]} */
+  SpecialGizmos: [],
+
   /** @type {PromptBuilder} */
   PromptBuilder: null,
 
@@ -309,11 +363,22 @@ window.AIPRM = {
     pageSize: +localStorage.getItem(lastPageSizeKey) || pageSizeDefault, // The number of prompts per page
   },
 
+  // This object contains properties for the gizmo section
+  GizmoSection: {
+    currentPage: 0, // The current page number
+    pageSize: +localStorage.getItem(lastGizmoPageSizeKey) || pageSizeDefault, // The number of prompts per page
+  },
+
   /** @type {?Prompt} */
   SelectedPromptTemplate: null,
 
   /** @type {import('./client.js').Message[]} */
   Messages: [],
+
+  /** @type {import('./client.js').Message[]} */
+  StaticMessages: [],
+
+  isMessageShown: false,
 
   // Selected my profile info to include in the submitted prompt
   IncludeMyProfileMessage:
@@ -324,8 +389,123 @@ window.AIPRM = {
   // Prefill prompt via event
   PrefillPrompt: null,
 
+  /** @type {?CurrentGizmo} */
+  CurrentGizmo: null,
+
+  /** @type {Referrals} */
+  Referrals: null,
+
+  // Check version using version server
+  async checkVersion() {
+    try {
+      const response = await this.fetch(
+        `https://version.aiprm.com/check/${VERSION}?v=${this.CacheBuster}`
+      );
+
+      if (!response.ok) {
+        throw new Error('Could not check for updates');
+      }
+
+      const versionCheck = await response.json();
+
+      if (!versionCheck?.IsOutdated) {
+        return;
+      }
+
+      // Version is outdated - display a warning message
+      const elementID = 'AIPRM-VersionWarning';
+      let element = document.getElementById(elementID);
+
+      // If the warning doesn't exist, create it
+      if (!element) {
+        element = document.createElement('div');
+        element.id = elementID;
+      }
+
+      element.innerHTML = /*html*/ `
+          <div class="AIPRM__fixed AIPRM__flex AIPRM__justify-center AIPRM__w-full AIPRM__top-0 AIPRM__z-50 AIPRM__pointer-events-none">
+            <div class="AIPRM__bg-red-500 AIPRM__w-full AIPRM__justify-center  AIPRM__flex AIPRM__flex-row AIPRM__pointer-events-auto AIPRM__px-6 AIPRM__py-6 AIPRM__text-white" role="alert">
+              <div class="AIPRM__flex AIPRM__gap-4">
+                <div>
+                  <p class="AIPRM__max-w-2xl" style="overflow-wrap: anywhere;">
+                    ${versionCheck.Message}
+                  </p>
+                </div>
+                <button>${svg('Cross')}</button>
+              </div>
+            </div>
+          </div>
+        `;
+
+      // Remove the warning from the DOM on click
+      element.querySelector('button').addEventListener('click', () => {
+        element.remove();
+      });
+
+      document.body.appendChild(element);
+    } catch (error) {
+      // Display fallback information
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Could not check for updates.'
+      );
+    }
+  },
+
+  // Fetch static static messages from remote JSON file
+  async fetchStaticMessages() {
+    try {
+      const response = await this.fetch(
+        `https://static.aiprm.com/${VERSION}/messages.json?v=${this.CacheBuster}`
+      );
+
+      if (!response.ok) {
+        throw new Error('Could not load static messages');
+      }
+
+      /** @type {import('./client.js').Message[]} */
+      let messages = await response.json();
+
+      this.StaticMessages = messages?.length > 0 ? messages : [];
+
+      // no new messages
+      if (!this.getUnseenStaticMessages().length) {
+        return;
+      }
+
+      this.showMessages();
+    } catch (error) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Could not fetch static messages.'
+      );
+    }
+  },
+
+  // Get the last seen static message ID from local storage and filter out messages before this ID (including this ID)
+  getUnseenStaticMessages() {
+    // skip messages before the last seen message
+    const lastSeenStaticMessage = +localStorage.getItem(
+      lastSeenStaticMessageKey
+    );
+
+    this.StaticMessages = !lastSeenStaticMessage
+      ? this.StaticMessages
+      : this.StaticMessages.filter(
+          (message) => message.MessageID > lastSeenStaticMessage
+        );
+
+    return this.StaticMessages;
+  },
+
   async init() {
     console.log('AIPRM init');
+
+    // check version before initializing
+    await this.checkVersion();
+
+    // fetch static system messages
+    await this.fetchStaticMessages();
 
     // listen for AIPRM.prompt event from content script
     document.addEventListener('AIPRM.prompt', (event) => {
@@ -340,8 +520,8 @@ window.AIPRM = {
     // initialize user based on page props
     if (window?.__NEXT_DATA__?.props?.pageProps?.user?.id) {
       this.Client.User = {
-        ExternalID: window.__NEXT_DATA__.props.pageProps.user.id,
-        ExternalSystemNo: ExternalSystemNo.OPENAI,
+        OperatorID: window.__NEXT_DATA__.props.pageProps.user.id,
+        SystemNo: SystemNo.OPENAI,
         UserFootprint: '',
         IsLinked: false,
       };
@@ -354,7 +534,7 @@ window.AIPRM = {
 
     /**
      * Wait for prompt templates, lists, topics, activities, config from remote JSON file,
-     * languages, messages and optional client initialization (if not initialized yet)
+     * languages, messages, gizmos and optional client initialization (if not initialized yet)
      */
     await Promise.all([
       this.fetchPromptTemplates(false),
@@ -366,6 +546,7 @@ window.AIPRM = {
       this.fetchMessages(false),
       this.fetchModels(),
       this.fetchPromptBuilderConfig(),
+      this.fetchGizmos(false),
       clientInitialized ? Promise.resolve() : this.Client.init(),
     ]);
 
@@ -374,9 +555,19 @@ window.AIPRM = {
 
     this.replaceFetch();
 
+    // Initialize Referrals before observer to add button to the sidebar
+    this.Referrals = new Referrals(
+      this.Client,
+      this.Config.getReferralsConfig(),
+      this.showNotification
+    );
+
     this.createObserver();
 
-    if (!this.Client.UserQuota.connectAccountAnnouncement()) {
+    if (
+      !this.isMessageShown &&
+      !this.Client.UserQuota.connectAccountAnnouncement()
+    ) {
       this.showMessages();
     }
 
@@ -385,7 +576,13 @@ window.AIPRM = {
 
     this.loadPromptTemplateTypeAndListFromLocalStorage();
 
+    this.initSearchTermFromParam();
+
+    this.extractCurrentGizmoInformation();
+
     this.insertPromptTemplatesSection();
+
+    this.insertGizmosSection();
 
     // Wait for tones, writing styles and continue actions
     await Promise.all([
@@ -428,6 +625,133 @@ window.AIPRM = {
     this.addWatermark();
 
     this.setupFavoritePromptsContextMenu();
+
+    this.addLicenseWarning();
+  },
+
+  /**
+   * Extract current Gizmo basic information
+   */
+  extractCurrentGizmoInformation() {
+    const config = this.Config.getPromptTemplatesConfig();
+    const GizmoCode = window.location.href.match(config.GizmoCodePattern);
+
+    if (GizmoCode?.[1]) {
+      const selectorConfig = this.Config.getSelectorConfig();
+      const title = document.querySelector(selectorConfig.CurrentGizmoTitle);
+
+      this.CurrentGizmo = {
+        GizmoCode: GizmoCode[1],
+        Title: title?.textContent || '',
+      };
+
+      this.CurrentGizmo.PromptStarterS = this.createGizmoStarterPrompts();
+
+      // try to extract prompt starter, if we do not have Gizmo in directory
+      if (
+        !this.CurrentGizmo.PromptStarterS ||
+        this.CurrentGizmo.PromptStarterS.length === 0
+      ) {
+        const promptStarterButtons = document.querySelectorAll(
+          this.Config.getSelectorConfig().CurrentGizmoPromptStarters
+        );
+
+        if (promptStarterButtons) {
+          for (let i = 0; i < promptStarterButtons.length; i++) {
+            const promptText = promptStarterButtons[i].textContent;
+
+            if (promptText && promptText.length > 0) {
+              this.CurrentGizmo.PromptStarterS.push({
+                ID: 'g-' + i, // we need to have unique ID for each PromptStarter - also different from normal AIPRM prompts
+                Title: this.CurrentGizmo.Title + ' starter prompt',
+                Prompt: promptText,
+                IsGizmoStarterPrompt: true,
+              });
+            }
+          }
+        }
+      }
+
+      if (this.SpecialGizmos.includes(this.CurrentGizmo.GizmoCode)) {
+        this.PromptModel = DefaultPromptModel;
+      } else {
+        this.PromptModel = this.CurrentGizmo.GizmoCode;
+      }
+
+      localStorage.setItem(lastPromptModelKey, this.PromptModel);
+    } else {
+      this.CurrentGizmo = null;
+
+      // if PromptModel is set to a specific Gizmo, then we need to reset it
+      if (
+        this.PromptModel !== DefaultPromptModel &&
+        !this.ModelsActive?.find((model) => model.ID === this.PromptModel)
+      ) {
+        this.PromptModel = DefaultPromptModel;
+        localStorage.setItem(lastPromptModelKey, this.PromptModel);
+      }
+    }
+  },
+
+  addLicenseWarning() {
+    if (!this.Client.User.LicenseWarning) {
+      return;
+    }
+
+    const licenseWarningDismissed = localStorage.getItem(
+      licenseWarningDismissedKey
+    );
+
+    if (licenseWarningDismissed) {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+
+      if (now.getTime() <= licenseWarningDismissed) {
+        return;
+      }
+    }
+
+    const elementID = 'AIPRM-LicenseWarning';
+    let element = document.getElementById(elementID);
+
+    // if notification doesn't exist, create it
+    if (!element) {
+      element = document.createElement('div');
+      element.id = elementID;
+    }
+
+    const severityClassName = {
+      [LicenseWarningLevelNo.WARNING]: 'AIPRM__bg-orange-500',
+      [LicenseWarningLevelNo.ERROR]: 'AIPRM__bg-red-500',
+    };
+
+    element.innerHTML = /*html*/ `
+      <div class="AIPRM__fixed AIPRM__flex AIPRM__justify-center AIPRM__w-full AIPRM__top-0 AIPRM__z-50 AIPRM__pointer-events-none">
+        <div class="${
+          severityClassName[this.Client.User.LicenseWarning.WarningLevelNo]
+        } AIPRM__w-full AIPRM__justify-center  AIPRM__flex AIPRM__flex-row AIPRM__pointer-events-auto AIPRM__px-6 AIPRM__py-6 AIPRM__text-white" role="alert">
+          <div class="AIPRM__flex AIPRM__gap-4">
+            <div>
+              <p class="AIPRM__max-w-2xl" style="overflow-wrap: anywhere;">${
+                this.Client.User.LicenseWarning.Message
+              }</p>
+            </div>
+            <button>${svg('Cross')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // remove element from DOM on click
+    element.querySelector('button').addEventListener('click', () => {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      localStorage.setItem(licenseWarningDismissedKey, now.getTime());
+
+      element.remove();
+    });
+
+    document.body.appendChild(element);
   },
 
   // Preset default create prompt mode based on existing (advanced) or new user (basic)
@@ -539,7 +863,8 @@ window.AIPRM = {
     if (this.SelectedPromptTemplate?.ID) {
       this.Client.usePrompt(
         this.SelectedPromptTemplate.ID,
-        UsageTypeNo.LIVE_CRAWLING
+        UsageTypeNo.LIVE_CRAWLING,
+        this.CurrentGizmo?.GizmoCode
       );
     }
 
@@ -918,6 +1243,20 @@ ${textContent}
     }
   },
 
+  // get the search term from the URL and select the prompt template
+  async initSearchTermFromParam() {
+    const params = new URLSearchParams(window.location.search);
+    const paramSearchTerm = params.get(queryParamSearchTerm);
+
+    if (paramSearchTerm) {
+      if (window.location.href.match(this.Config.getEndpointGizmos())) {
+        this.GizmoSearch = paramSearchTerm;
+      } else {
+        this.PromptSearch = paramSearchTerm;
+      }
+    }
+  },
+
   // Fetch the list of messages from the server
   async fetchMessages(render = true) {
     try {
@@ -939,12 +1278,22 @@ ${textContent}
     }
   },
 
-  // Display one of the messages
+  /**
+   * Display one of the messages
+   *
+   * @returns {boolean} true if message is shown, false if not
+   */
   showMessages() {
-    showMessage(
+    if (this.isMessageShown) {
+      return;
+    }
+
+    this.isMessageShown = showMessage(
+      this.getUnseenStaticMessages(),
       this.Messages,
       this.confirmMessage.bind(this),
-      this.voteForMessage.bind(this)
+      this.voteForMessage.bind(this),
+      this.updateLastSeenStaticMessage.bind(this)
     );
   },
 
@@ -970,6 +1319,8 @@ ${textContent}
       'Thanks for the confirmation!'
     );
 
+    this.isMessageShown = false;
+
     return true;
   },
 
@@ -990,6 +1341,30 @@ ${textContent}
       );
       return false;
     }
+
+    this.isMessageShown = false;
+
+    return true;
+  },
+
+  /**
+   * Update last seen static message using localStorage
+   *
+   * @param {string} MessageID
+   * @returns boolean Whether the last seen static message was updated successfully
+   */
+  updateLastSeenStaticMessage(MessageID) {
+    try {
+      localStorage.setItem(lastSeenStaticMessageKey, MessageID);
+    } catch (error) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Something went wrong. Please try again.'
+      );
+      return false;
+    }
+
+    this.isMessageShown = false;
 
     return true;
   },
@@ -1344,15 +1719,20 @@ ${textContent}
           );
         })
         .then((models) => {
-          // sort the models by Label
-          this.Models = models.sort((a, b) =>
-            a.LabelAuthor.localeCompare(b.LabelAuthor)
-          );
+          // filter out special gizmos and sort the models by Label
+          this.Models = models
+            .filter((model) => model.StatusNo !== ModelStatusNo.SPECIAL_GIZMO)
+            .sort((a, b) => a.LabelAuthor.localeCompare(b.LabelAuthor));
 
           // filter out models that are not active
           this.ModelsActive = this.Models.filter(
             (model) => model.StatusNo === ModelStatusNo.ACTIVE
           );
+
+          // collect special gizmo codes
+          this.SpecialGizmos = models
+            .filter((model) => model.StatusNo === ModelStatusNo.SPECIAL_GIZMO)
+            .map((model) => model.ID);
         })
     );
   },
@@ -1535,15 +1915,37 @@ ${textContent}
     }
   },
 
+  // Fetch gizmos using the AIPRM API client
+  async fetchGizmos(render = true) {
+    try {
+      this.Gizmos = await this.Client.getGizmos(this.GizmoSortMode);
+    } catch (error) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        `Could not load GPTs. ${error instanceof Reaction ? error.message : ''}`
+      );
+      return;
+    }
+
+    if (render) {
+      this.insertGizmosSection();
+    }
+  },
+
   /**
-   * Check if a template is for model
+   * Check if a template is for Model or Plugin
    *
    * @param {Prompt} template
-   * @param {string} modelID
+   * @param {string} modelOrPluginID
    * @returns {boolean}
    */
-  isTemplateForModel(template, modelID) {
-    if (template.ModelS?.find((model) => model === modelID)) {
+  isTemplateForModelOrPlugin(template, modelOrPluginID) {
+    if (template.ModelS?.find((model) => model === modelOrPluginID)) {
+      return true;
+    } else if (
+      this.CurrentGizmo &&
+      template.PluginS?.find((plugin) => plugin === modelOrPluginID)
+    ) {
       return true;
     } else {
       return false;
@@ -1599,8 +2001,139 @@ ${textContent}
 
   replaceFetch() {
     window.fetch = async (...t) => {
+      // Switch to the original fetch function if prompt templates are disabled
+      if (!this.Config.arePromptTemplatesEnabled()) {
+        return this.fetch(...t);
+      }
+
+      const config = this.Config.getPromptTemplatesConfig();
+
+      // If the request is for the message feedback API, track the message feedback
+      if (t?.[0].match(config.EndpointMessageFeedback)) {
+        // Only track the message feedback if the current page URL contains Gizmo code
+
+        // TODO: This doesn't work properly with inline tagging of GPTs
+        // (conversation possibly includes multiple GPTs, but the GizmoCode is not included in the message feedback request)
+        const GizmoCode = window.location.href.match(config.GizmoCodePattern);
+
+        if (!GizmoCode?.[1]) {
+          // Use the original fetch function to make the request since we know it is not for the chat backend API
+          return this.fetch(...t);
+        }
+
+        try {
+          // Parse the request body from JSON
+          const body = JSON.parse(t[1].body);
+
+          // Do not track duplicate votes with additional text feedback
+          if (body[config.FeedbackTextField]) {
+            return this.fetch(...t);
+          }
+
+          // Unknown feedback type
+          if (
+            !body[config.FeedbackRatingField] ||
+            ![config.FeedbackThumbsUp, config.FeedbackThumbsDown].includes(
+              body[config.FeedbackRatingField]
+            )
+          ) {
+            return this.fetch(...t);
+          }
+
+          // Track the message feedback
+          this.Client.voteForGizmo(
+            GizmoCode[1],
+            GizmoVoteTypeNo.RESULT_THUMBS,
+            body[config.FeedbackRatingField] &&
+              body[config.FeedbackRatingField] === config.FeedbackThumbsDown
+              ? -1
+              : 1
+          );
+        } catch (err) {
+          // If there was an error parsing the request body or tracking the message feedback,
+          // just use the original fetch function
+          console.error(
+            'replaceFetch: Error parsing request body or tracking message feedback',
+            err
+          );
+        }
+
+        // Use the original fetch function to make the request since we know it is not for the chat backend API
+        return this.fetch(...t);
+      }
+
+      // Get the endpoint pattern for the chat backend API
+      const EndpointConversation = config.EndpointConversation;
+
       // If the request is not for the chat backend API, just use the original fetch function
-      if (t[0] !== EndpointConversation) return this.fetch(...t);
+      if (!t[0] || !t[0].match(EndpointConversation)) {
+        return this.fetch(...t);
+      }
+
+      // Options object for the request
+      let options;
+
+      // Request body
+      let body;
+
+      // Index of the message part in the request body
+      let messagePartIndex;
+
+      // Prompt from the request body
+      let prompt;
+
+      // Use custom index lookup for prompt or not
+      let useAuxIndexLookup;
+
+      // Check if message contains placeholders to augment prompt
+      try {
+        // Get the options object for the request, which includes the request body
+        options = t[1];
+
+        // Parse the request body from JSON
+        body = JSON.parse(options.body);
+
+        // Track Gizmo usage
+        if (body?.conversation_mode?.gizmo_id) {
+          // The first message in the conversation
+          if (!body?.conversation_id) {
+            this.Client.useGizmo(
+              body.conversation_mode.gizmo_id,
+              GizmoVoteTypeNo.USE_ONCE,
+              {
+                conversation_mode: body.conversation_mode,
+                model: body.model,
+              }
+            );
+          }
+
+          // All other messages in the conversation
+          this.Client.useGizmo(
+            body.conversation_mode.gizmo_id,
+            GizmoVoteTypeNo.USE_MESSAGE
+          );
+        }
+
+        // Get the index of the message part in the request body
+        messagePartIndex = this.findMessagePartIndex(body.messages[0]);
+
+        // Get the prompt from the request body
+        prompt = body.messages[0].content.parts[messagePartIndex];
+
+        // Check if prompt contains reference for custom index lookup
+        // $[<NAMESPACE>::]<IndexCode>[(Max Count of Chunks Returned)]:<Query>
+        // namespace, namespace delimiter and max count of chunks returned are optional
+
+        // TODO: move to remote config for hotfixes
+        useAuxIndexLookup =
+          this.Client.UserQuota.hasCustomIndexesFeatureEnabled() &&
+          prompt.match(AuxIndexLookupDefinition);
+
+        // console.log('replaceFetch: useAuxIndexLookup', !!useAuxIndexLookup);
+      } catch (error) {
+        console.error('replaceFetch: Error parsing request body', error);
+        return this.fetch(...t);
+      }
 
       // If no prompt template, tone, writing style or target language has been selected,
       // use only the profile message or the original fetch function if the profile message is not needed
@@ -1608,7 +2141,8 @@ ${textContent}
         !this.SelectedPromptTemplate &&
         !this.Tone &&
         !this.WritingStyle &&
-        !this.TargetLanguage
+        !this.TargetLanguage &&
+        !useAuxIndexLookup
       ) {
         // Use profile message if needed - otherwise, use the original fetch function
         if (!this.IncludeMyProfileMessage || !this.SelectedMyProfileInfoID) {
@@ -1619,15 +2153,6 @@ ${textContent}
         }
 
         try {
-          // Get the options object for the request, which includes the request body
-          const options = t[1];
-
-          // Parse the request body from JSON
-          const body = JSON.parse(options.body);
-
-          // Get the index of the message part in the request body
-          const messagePartIndex = this.findMessagePartIndex(body.messages[0]);
-
           const myProfileInfo = this.MyProfileInfos
             ? this.MyProfileInfos.find(
                 (myProfileInfo) =>
@@ -1663,25 +2188,22 @@ ${textContent}
       const template = this.SelectedPromptTemplate;
 
       if (template) {
-        this.Client.usePrompt(template.ID, UsageTypeNo.SEND);
+        this.Client.usePrompt(
+          template.ID,
+          UsageTypeNo.SEND,
+          this.CurrentGizmo?.GizmoCode
+        );
       }
 
       // Allow the user to use continue actions after sending a prompt
       this.showContinueActionsButton();
 
+      // Collect variable values and names for custom index lookup
+      let variableValues = [];
+      let variableNames = [];
+
       try {
-        // Get the options object for the request, which includes the request body
-        const options = t[1];
-        // Parse the request body from JSON
-        const body = JSON.parse(options.body);
-
-        // Get the index of the message part in the request body
-        const messagePartIndex = this.findMessagePartIndex(body.messages[0]);
-
         if (template) {
-          // Get the prompt from the request body
-          const prompt = body.messages[0].content.parts[messagePartIndex];
-
           // Use the default target language if no target language has been selected
           const targetLanguage = (
             this.TargetLanguage ? this.TargetLanguage : DefaultTargetLanguage
@@ -1689,10 +2211,17 @@ ${textContent}
 
           // Replace the prompt in the request body with the selected prompt template,
           // inserting the original prompt into the template and replacing the target language placeholder
-          let promptTextUpdated = template.Prompt.replaceAll(
+          let promptTextUpdated1 = template.Prompt.replaceAll(
             PromptPlaceholder,
             prompt
           ).replaceAll(TargetLanguagePlaceholder, targetLanguage);
+
+          // create a 1 liner from prompt by replacing all the \n with spaces
+          let prompt1 = prompt.replaceAll('\n', ' ');
+
+          let promptTextUpdated = promptTextUpdated1
+            .replaceAll(PromptPlaceholder1, prompt1)
+            .replaceAll(TargetLanguagePlaceholder, targetLanguage);
 
           // Replace variables with values
           if (template.PromptVariables) {
@@ -1705,6 +2234,9 @@ ${textContent}
                   VariablePlaceholder.replace('{idx}', promptVariable.ID),
                   v.value
                 );
+
+                variableValues.push(v.value);
+                variableNames.push(`VARIABLE${promptVariable.ID}`);
               }
             });
           }
@@ -1739,7 +2271,11 @@ ${textContent}
           );
 
           // Track the tone usage
-          this.Client.usePrompt(`${tone.ID}`, UsageTypeNo.SEND);
+          this.Client.usePrompt(
+            `${tone.ID}`,
+            UsageTypeNo.SEND,
+            this.CurrentGizmo?.GizmoCode
+          );
         }
 
         // If the user has selected a writing style, add it to the request body
@@ -1755,7 +2291,11 @@ ${textContent}
           );
 
           // Track the writing style usage
-          this.Client.usePrompt(`${writingStyle.ID}`, UsageTypeNo.SEND);
+          this.Client.usePrompt(
+            `${writingStyle.ID}`,
+            UsageTypeNo.SEND,
+            this.CurrentGizmo?.GizmoCode
+          );
         }
 
         // If the user has selected a target language, add it to the request body
@@ -1795,6 +2335,98 @@ ${textContent}
 
         // Clear the selected prompt template
         await this.selectPromptTemplateByIndex(null);
+
+        // console.log('prompt: ', prompt);
+
+        // console.log(
+        //   'promptPrepared: ',
+        //   body.messages[0].content.parts[messagePartIndex]
+        // );
+
+        // TODO: Custom index lookup could be also specified as a prompt template variable value?
+        // TODO: YES
+        // 2nd check for custom index lookup
+        useAuxIndexLookup =
+          this.Client.UserQuota.hasCustomIndexesFeatureEnabled() &&
+          body.messages[0].content.parts[messagePartIndex].match(
+            AuxIndexLookupDefinition
+          );
+
+        // Augment prompt with custom index lookup
+        if (useAuxIndexLookup) {
+          // Show notification that custom index lookup is started
+          this.showNotification(
+            NotificationSeverity.INFO,
+            `Custom index lookup started ...`,
+            false
+          );
+
+          let augmentedPrompt;
+          let augmentPromptRequestError;
+
+          try {
+            // Send request to custom index lookup endpoint to augment prompt
+            augmentedPrompt = await this.Client.augmentPrompt(
+              prompt,
+              body.messages[0].content.parts[messagePartIndex],
+              body.model,
+              variableNames,
+              variableValues,
+              template ? template.ID : null
+            );
+          } catch (error) {
+            if (
+              error instanceof Reaction &&
+              error.ReactionNo ===
+                ReactionNo.RXN_AIPRM_DOCUMENT_INDEX_INCORRECT_PLAN
+            ) {
+              this.Client.UserQuota.incorrectPlanForDocumentIndexFeature();
+
+              this.showNotification(
+                NotificationSeverity.INFO,
+                `Custom index lookup failed - feature not supported in current plan - submitting prompt ...`
+              );
+
+              augmentPromptRequestError = error;
+            } else {
+              console.error('Error augmenting prompt', error);
+
+              this.showNotification(
+                NotificationSeverity.ERROR,
+                'Custom index lookup failed - ' +
+                  (error instanceof Reaction
+                    ? error.message
+                    : 'Something went wrong.') +
+                  ' Submitting prompt ...'
+              );
+
+              augmentPromptRequestError = error;
+            }
+          }
+
+          // No prompt returned from custom index lookup
+          if (!augmentedPrompt?.Prompt) {
+            console.error('Error augmenting prompt - no prompt returned');
+
+            // Show error notification only if request didn't fail
+            // (otherwise there is no prompt, because request failed and error notification was already shown)
+            if (!augmentPromptRequestError) {
+              this.showNotification(
+                NotificationSeverity.ERROR,
+                'Custom index lookup failed - no prompt returned - submitting prompt ...'
+              );
+            }
+          } else {
+            // Replace the prompt in the request body with the augmented prompt
+            body.messages[0].content.parts[messagePartIndex] =
+              augmentedPrompt.Prompt;
+
+            this.showNotification(
+              NotificationSeverity.SUCCESS,
+              'Custom index lookup finished - submitting prompt ...'
+            );
+          }
+        }
 
         // Stringify the modified request body and update the options object
         options.body = JSON.stringify(body);
@@ -1839,22 +2471,42 @@ ${textContent}
 
   // This function is called for each new element added to the document body
   async handleElementAdded(e) {
+    const selectorConfig = this.Config.getSelectorConfig();
+
     // If watermark is enabled, add corresponding classes
     this.addWatermark();
 
     // If the element added is the root element for the chat sidebar, set up the sidebar
     if (
-      e.id === 'headlessui-portal-root' ||
-      e.id === 'language-select-wrapper'
+      e.id === selectorConfig.ElementAddedSidebarID1 ||
+      e.id === selectorConfig.ElementAddedSidebarID2
     ) {
       this.setupSidebar();
       return;
     }
 
+    // "Explore GPTs" or "My GPTs" page - setup sidebar and hide "Export Button", but continue with other actions
+    if (
+      e.className &&
+      e.className === selectorConfig.GizmosContentContainer &&
+      window.location.href.match(this.Config.getEndpointGizmos())
+    ) {
+      this.setupSidebar();
+
+      // No export possible on these pages
+      const button = document.getElementById('export-button');
+      if (button) button.style = 'pointer-events: none;opacity: 0.5';
+    }
+
     // Disable "Export Button" when no chat were started.
     // Insert "Prompt Templates" section to the main page.
     // Insert language select and continue button above the prompt textarea input
-    if (e.querySelector('h1.text-4xl')) {
+    if (e.querySelector(selectorConfig.ElementAddedExportButtonDisable)) {
+      this.extractCurrentGizmoInformation();
+
+      // reset current page, so prompt templates are shown from start
+      this.PromptTemplateSection.currentPage = 0;
+
       await this.insertPromptTemplatesSection();
 
       const button = document.getElementById('export-button');
@@ -1866,7 +2518,7 @@ ${textContent}
 
     // Enable "Export Button" when a new chat started.
     // Insert language select and continue button above the prompt textarea input
-    if (document.querySelector('.text-base.xl\\:max-w-3xl')) {
+    if (document.querySelector(selectorConfig.ElementAddedExportButtonEnable)) {
       const button = document.getElementById('export-button');
       if (button) button.style = '';
 
@@ -1875,7 +2527,9 @@ ${textContent}
     }
 
     // Add "Save prompt as template" button, if new prompt was added
-    if (document.querySelector('.whitespace-pre-wrap')) {
+    if (
+      document.querySelector(selectorConfig.ElementAddedSavePromptAsTemplate)
+    ) {
       this.insertSavePromptAsTemplateButton();
 
       this.insertPromptTemplatesSidebar();
@@ -1886,6 +2540,272 @@ ${textContent}
 
     // Apply general layout changes based on config
     this.applyLayoutChanges();
+
+    // Add GPTs
+    if (e.querySelector(selectorConfig.GizmosTitle)) {
+      this.insertGizmosSection();
+    }
+  },
+
+  // Insert GPTs
+  insertGizmosSection() {
+    const selectorConfig = this.Config.getSelectorConfig();
+
+    const titles = document.querySelectorAll(selectorConfig.GizmosTitle);
+
+    // if there are no titles, then return (not GPTs page)
+    if (!titles || titles.length <= selectorConfig.GizmosTitleIndex) {
+      return;
+    }
+
+    // Use the second title as the reference element
+    const firstElement = titles[selectorConfig.GizmosTitleIndex];
+
+    // find parent of container and add GPTs before it
+    const parent = firstElement.parentElement;
+
+    if (!parent) {
+      return;
+    }
+
+    // find GPTs container
+    let gptsContainer = document.getElementById('AIPRM__gpts-container');
+
+    // create GPTs container if it doesn't exist
+    if (!gptsContainer) {
+      gptsContainer = document.createElement('div');
+      gptsContainer.id = 'AIPRM__gpts-container';
+      gptsContainer.className = '';
+
+      // add GPTs container before parent
+      parent.insertBefore(gptsContainer, firstElement);
+    }
+
+    // Get the current page number and page size
+    const { currentPage, pageSize } = this.GizmoSection;
+
+    let gizmos = this.filterGizmos(this.Gizmos);
+
+    // Calculate the start and end indices of the current page of GPTs
+    const start = pageSize * currentPage;
+    const end = Math.min(pageSize * (currentPage + 1), gizmos.length);
+
+    // Get the GPTs for the current page
+    const gptsForPage = gizmos.slice(start, end);
+
+    const paginationContainer = /*html*/ `
+      <div class="AIPRM__flex AIPRM__flex-1 AIPRM__gap-3.5 AIPRM__justify-between AIPRM__items-center AIPRM__flex-col sm:AIPRM__flex-row AIPRM__mt-10 AIPRM__my-4">
+        <div class="AIPRM__text-left" style="margin-top: -1rem;">
+          <label class="AIPRM__block AIPRM__text-sm AIPRM__font-medium" title="The number of GPTs per page">GPTs per Page</label>
+          <select class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800 gizmosPageSizeSelect">
+            ${pageSizeOptions
+              .map(
+                (pageSize) => /*html*/ `
+                  <option value="${pageSize}" ${
+                  pageSize === this.GizmoSection.pageSize ? 'selected' : ''
+                }>${pageSize}</option>`
+              )
+              .join('')}
+          </select>
+        </div>
+        
+        <span class="${css`paginationText`}">
+          Showing <span class="${css`paginationNumber`}">${
+      start + 1
+    }</span> to <span class="${css`paginationNumber`}">${end}</span> of <span class="${css`paginationNumber`}">${
+      gizmos.length
+    } GPTs</span>
+        </span>
+        <div class="${css`paginationButtonGroup`}">
+          <button onclick="AIPRM.prevGizmosPage()" class="${css`paginationButton`} AIPRM__text-sm" style="border-radius: 6px 0 0 6px">Prev</button>
+          <button onclick="AIPRM.nextGizmosPage()" class="${css`paginationButton`} AIPRM__border-0 AIPRM__border-l AIPRM__border-gray-500 dark:AIPRM__border-gray-700 AIPRM__text-sm" style="border-radius: 0 6px 6px 0">Next</button>
+        </div>
+      </div>`;
+
+    // add GPTs to GPTs container
+    gptsContainer.innerHTML = /*html*/ `
+      <div class="AIPRM__text-2xl AIPRM__font-bold">AIPRM Community GPTs</div>
+           
+      <div class="AIPRM__grid AIPRM__grid-cols-2 lg:AIPRM__flex AIPRM__flex-row AIPRM__gap-3 AIPRM__items-end AIPRM__justify-between AIPRM__mt-3 AIPRM__w-full md:last:AIPRM__mb-6 AIPRM__pt-2 AIPRM__stretch AIPRM__text-left AIPRM__text-sm">
+        <div>
+          <label for="gizmoSortBySelect" class="AIPRM__block AIPRM__text-sm AIPRM__font-medium">Sort by</label>
+      
+          <select id="gizmoSortBySelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800">
+            ${Object.keys(SortModeNo)
+              .map(
+                (sortMode) => /*html*/ `
+                <option value="${SortModeNo[sortMode]}" ${
+                  this.GizmoSortMode === SortModeNo[sortMode] ? 'selected' : ''
+                }>${capitalizeWords(sortMode.replaceAll('_', ' '))}</option>`
+              )
+              .join('')}
+          </select>
+        </div>
+        
+        <div class="AIPRM__whitespace-nowrap AIPRM__flex">
+          <button title="Submit a new GPT" 
+            onclick="event.preventDefault(); AIPRM.submitNewGPT()" 
+            class="AIPRM__rounded AIPRM__justify-center AIPRM__items-center AIPRM__hidden lg:AIPRM__inline-block AIPRM__mr-1 AIPRM__p-2 AIPRM__px-2.5 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-800">
+            ${svg('Plus')}
+          </button>
+          <input id="gizmoSearchInput" type="search" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__inline-block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 lg:AIPRM__w-[260px] dark:hover:AIPRM__bg-gray-800" placeholder="Search" 
+            value="${sanitizeInput(
+              this.GizmoSearch
+            )}" onfocus="this.value = this.value">          
+        </div>
+
+        <div class="lg:AIPRM__hidden AIPRM__col-start-2">
+          <button title="Submit a new GPT" 
+            onclick="event.preventDefault(); AIPRM.submitNewGPT()" 
+            class="AIPRM__text-sm AIPRM__rounded AIPRM__w-full AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__p-2 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-800">
+            ${svg('Plus')} &nbsp; Submit a new GPT
+          </button>
+        </div>
+      </div>
+      
+      <div class="AIPRM__mb-10 AIPRM__mt-4">        
+
+        ${gizmos.length > this.GizmoSection.pageSize ? paginationContainer : ''}
+        
+        ${
+          gizmos.length === 0
+            ? /*html*/ `
+              <div class="AIPRM__w-full AIPRM__my-8 AIPRM__text-center">
+                <div class="AIPRM__font-semibold AIPRM__text-xl">No GPTs found for your current filter.</div>
+                <div class="AIPRM__text-sm">Please reset your filters to view all GPTs.</div>
+                <a class="AIPRM__underline AIPRM__text-sm" href="#" title="Reset filters" onclick="event.stopPropagation(); AIPRM.resetGizmoFilters();">Click here to reset filters</a>
+              </div>
+            `
+            : ''
+        }
+
+        <ul class="AIPRM__gap-3.5 AIPRM__grid AIPRM__grid-cols-1 lg:AIPRM__grid-cols-2 AIPRM__mb-4">
+          ${gptsForPage
+            .map((gpt) => {
+              return /*html*/ `
+                <button class="AIPRM__flex AIPRM__flex-col AIPRM__gap-2 AIPRM__w-full AIPRM__bg-gray-50 dark:AIPRM__bg-white/5 AIPRM__p-4 AIPRM__rounded-md hover:AIPRM__bg-gray-200 dark:hover:AIPRM__bg-gray-800 AIPRM__text-left AIPRM__relative AIPRM__group" onclick="AIPRM.selectGizmo('${sanitizeInput(
+                  gpt.GizmoCode
+                )}')">
+                  <div class="flex AIPRM__gap-6 AIPRM__w-full AIPRM__justify-between">
+                    <div class="AIPRM__w-4/5 AIPRM__min-w-0">
+                      <h3 class="AIPRM__m-0 AIPRM__text-gray-900 dark:AIPRM__text-gray-100 AIPRM__text-xl" style="overflow-wrap: anywhere;">
+                        ${sanitizeInput(gpt.Title)}
+                      </h3>
+
+                      <div class="AIPRM__text-gray-500 AIPRM__text-xs AIPRM__flex AIPRM__pb-1 AIPRM__max-w-full">
+                          by <span class="AIPRM__mx-1 AIPRM__overflow-hidden AIPRM__text-ellipsis AIPRM__flex-1 AIPRM__whitespace-nowrap" title="Created by ${sanitizeInput(
+                            gpt.AuthorDisplayName || 'Anonymous'
+                          )}">
+                            ${sanitizeInput(
+                              gpt.AuthorDisplayName || 'Anonymous'
+                            )}
+                          </span>
+                      </div>
+
+                      <p class="AIPRM__m-0 AIPRM__text-gray-500 AIPRM__text-gray-600 dark:AIPRM__text-gray-200 AIPRM__overflow-hidden AIPRM__text-ellipsis text-sm AIPRM__mt-2" style="display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere;" title="${sanitizeInput(
+                        gpt.Description
+                      )}">
+                        ${sanitizeInput(gpt.Description)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <div class="AIPRM__h-[96px] AIPRM__w-[96px] AIPRM__flex-shrink-0">
+                        <div class="gizmo-shadow-stroke AIPRM__overflow-hidden AIPRM__rounded-full AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__h-full">
+                        <img
+                            src="${sanitizeInput(
+                              gpt.LogoURL
+                            )}" onerror="this.src='data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9Im5vIj8+CjwhRE9DVFlQRSBzdmcgUFVCTElDICItLy9XM0MvL0RURCBTVkcgMS4xLy9FTiIgImh0dHA6Ly93d3cudzMub3JnL0dyYXBoaWNzL1NWRy8xLjEvRFREL3N2ZzExLmR0ZCI+Cjxzdmcgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgdmlld0JveD0iMCAwIDE2MSAxODAiIHZlcnNpb249IjEuMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgeG1sOnNwYWNlPSJwcmVzZXJ2ZSIgeG1sbnM6c2VyaWY9Imh0dHA6Ly93d3cuc2VyaWYuY29tLyIgc3R5bGU9ImZpbGwtcnVsZTpldmVub2RkO2NsaXAtcnVsZTpldmVub2RkO3N0cm9rZS1saW5lam9pbjpyb3VuZDtzdHJva2UtbWl0ZXJsaW1pdDoyOyI+CiAgICA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgxLDAsMCwxLC00NDkuODYzLC0zNTg1OC44KSI+CiAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoMS40MTkzNCwwLDAsMS40MTkzNCwtMTg4LjQ2OSwzNTMxOCkiPgogICAgICAgICAgICA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjU4MzkyMSwwLDAsMC41ODM5MjEsLTQ5My42NzQsLTE0My44MTgpIj4KICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0xNjQxLjcyLDEwMzEuMTJMMTYyNi42OSwxMDY5LjI1TDE2NzEuNDcsMTA5NS4yN0wxNjYzLjA5LDEwNDMuMjJMMTY0MS43MiwxMDMxLjEyWiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoLTAuNTgzOTIxLDAsMCwwLjU4MzkyMSwxNTA2LjM5LC0xNDMuODE4KSI+CiAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMTY0MS43MiwxMDMxLjEyTDE2MjYuNjksMTA2OS4yNUwxNjcxLjQ3LDEwOTUuMjdMMTY2My4wOSwxMDQzLjIyTDE2NDEuNzIsMTAzMS4xMloiIHN0eWxlPSJmaWxsOndoaXRlOyIvPgogICAgICAgICAgICA8L2c+CiAgICAgICAgICAgIDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNTgzOTIxLDAsMCwwLjU4MzkyMSwtNDk0LjA5LC0xNDMuMjIxKSI+CiAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMTYxNi4zNiwxMDE3LjE3TDE2MTYuMzYsMTA2Mi4yOEwxNjMxLjQ4LDEwMjUuMTRMMTYxNi4zNiwxMDE3LjE3WiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoLTAuNTgzOTIxLDAsMCwwLjU4MzkyMSwxNTA2LjgxLC0xNDMuMjIxKSI+CiAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMTYxNi4zNiwxMDE3LjE3TDE2MTYuMzYsMTA2Mi4yOEwxNjMxLjQ4LDEwMjUuMTRMMTYxNi4zNiwxMDE3LjE3WiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC41MDg5NjEsMCwwLDAuNTgzOTIxLC0zNjguMDA4LC0yMTUuNDYpIj4KICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0xNjg5LjUyLDEwMzEuOThMMTcxMC4xOSwxMDIxLjUzTDE3MTAuMTksMTExNi4yNkwxNjg5LjI3LDExMDQuOTFMMTY4OS41MiwxMDMxLjk4WiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoLTAuNTA4OTYxLDAsMCwwLjU4MzkyMSwxMzgwLjczLC0yMTUuNDYpIj4KICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0xNjg5LjUyLDEwMzEuOThMMTcxMC4xOSwxMDIxLjUzTDE3MTAuMTksMTExNi4yNkwxNjg5LjI3LDExMDQuOTFMMTY4OS41MiwxMDMxLjk4WiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC43MTMzLDAsMCwwLjU4MzkyMSwtNzE3LjQ2NiwtMTQ0LjQ1MykiPgogICAgICAgICAgICAgICAgPHBhdGggZD0iTTE2ODkuNSwxMDM5LjY3TDE2ODkuNjEsMTAzOS41OUwxNzEwLjE5LDEwMjEuNTNMMTcxMC4xOSwxMTE2LjM3TDE2ODkuMjgsMTEwMS42MkwxNjg5LjUsMTAzOS42N1oiIHN0eWxlPSJmaWxsOndoaXRlOyIvPgogICAgICAgICAgICA8L2c+CiAgICAgICAgICAgIDxnIHRyYW5zZm9ybT0ibWF0cml4KC0wLjcxMzMsMCwwLDAuNTgzOTIxLDE3MzAuMTgsLTE0NC40NTMpIj4KICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0xNjg5LjUsMTAzOS42N0wxNjg5LjYxLDEwMzkuNTlMMTcxMC4xOSwxMDIxLjUzTDE3MTAuMTksMTExNi4zN0wxNjg5LjI4LDExMDEuNjJMMTY4OS41LDEwMzkuNjdaIiBzdHlsZT0iZmlsbDp3aGl0ZTsiLz4KICAgICAgICAgICAgPC9nPgogICAgICAgICAgICA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgwLjU4MzkyMSwwLDAsMC41ODM5MjEsLTQ5Ny4wMTIsLTE0My40NzgpIj4KICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0xNjg1LjA0LDkxNC4xMjJMMTYzNC4xLDk0Mi4yODFMMTY3Ny4xOCw5NjYuMzE0TDE2ODUuMDQsOTE0LjEyMloiIHN0eWxlPSJmaWxsOndoaXRlOyIvPgogICAgICAgICAgICA8L2c+CiAgICAgICAgICAgIDxnIHRyYW5zZm9ybT0ibWF0cml4KC0wLjU4MzkyMSwwLDAsMC41ODM5MjEsMTUwOS43MywtMTQzLjQ3OCkiPgogICAgICAgICAgICAgICAgPHBhdGggZD0iTTE2ODUuMDQsOTE0LjEyMkwxNjM0LjEsOTQyLjI4MUwxNjc3LjE4LDk2Ni4zMTRMMTY4NS4wNCw5MTQuMTIyWiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoMC41ODM4OTYsMC4wMDUzNTcwNiwtMC4wMDUzNTcwNiwwLjU4Mzg5NiwtNDkxLjA0OSwtMTUxLjUxKSI+CiAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMTYxOS45OCw5NDkuMjM3TDE3MDguNzcsOTk5LjAxM0wxNjk0LjAyLDEwMTAuNDNMMTYyMC4xMiw5NjkuNjEyTDE2MTkuOTgsOTQ5LjIzN1oiIHN0eWxlPSJmaWxsOndoaXRlOyIvPgogICAgICAgICAgICA8L2c+CiAgICAgICAgICAgIDxnIHRyYW5zZm9ybT0ibWF0cml4KC0wLjU4Mzg5NiwwLjAwNTM1NzA2LDAuMDA1MzU3MDYsMC41ODM4OTYsMTUwMy43NywtMTUxLjUxKSI+CiAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMTYxOS45OCw5NDkuMjM3TDE3MDguNzcsOTk5LjAxM0wxNjk0LjAyLDEwMTAuNDNMMTYyMC4xMiw5NjkuNjEyTDE2MTkuOTgsOTQ5LjIzN1oiIHN0eWxlPSJmaWxsOndoaXRlOyIvPgogICAgICAgICAgICA8L2c+CiAgICAgICAgICAgIDxnIHRyYW5zZm9ybT0ibWF0cml4KDAuNTgzODk2LDAuMDA1MzU3MDYsLTAuMDA1MzU3MDYsMC41ODM4OTYsLTQ5MS4wNDksLTEzMS45NjgpIj4KICAgICAgICAgICAgICAgIDxwYXRoIGQ9Ik0xNjE5Ljk4LDk0OS4yMzdMMTY4OS45MSw5ODguNTMxTDE2NzUuMjgsOTk5Ljk1NEwxNjIwLjEyLDk2OS42MTJMMTYxOS45OCw5NDkuMjM3WiIgc3R5bGU9ImZpbGw6d2hpdGU7Ii8+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoLTAuNTgzODk2LDAuMDA1MzU3MDYsMC4wMDUzNTcwNiwwLjU4Mzg5NiwxNTAzLjc3LC0xMzEuOTY4KSI+CiAgICAgICAgICAgICAgICA8cGF0aCBkPSJNMTYxOS45OCw5NDkuMjM3TDE2ODkuOTEsOTg4LjUzMUwxNjc1LjI4LDk5OS45NTRMMTYyMC4xMiw5NjkuNjEyTDE2MTkuOTgsOTQ5LjIzN1oiIHN0eWxlPSJmaWxsOndoaXRlOyIvPgogICAgICAgICAgICA8L2c+CiAgICAgICAgPC9nPgogICAgPC9nPgo8L3N2Zz4K'; this.classList.remove('AIPRM__h-full'); this.classList.remove('AIPRM__w-full'); this.classList.add('AIPRM__w-2/3'); this.classList.add('AIPRM__h-2/3'); this.parentElement.classList.add('AIPRM__bg-black');"
+                            class="AIPRM__h-full AIPRM__w-full" alt="GPT" width="96" height="96">
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  <div class="AIPRM__text-gray-500 AIPRM__text-xs AIPRM__flex AIPRM__pt-3 AIPRM__w-full AIPRM__justify-between AIPRM__mt-auto AIPRM__gap-2">
+                    <span class="AIPRM__flex AIPRM__items-center AIPRM__truncate" title="Views (${
+                      gpt.CountViews || 0
+                    })">
+                      <span class="AIPRM__p-1">${svg(
+                        'Eye'
+                      )}</span> &nbsp; <span class="AIPRM__truncate">${formatHumanReadableNumber(
+                gpt.CountViews || 0
+              )}</span>
+                    </span>
+
+                    <span class="AIPRM__flex AIPRM__items-center AIPRM__truncate" title="Usages (${
+                      gpt.CountUses || 0
+                    })">
+                      <span class="AIPRM__p-1">${svg(
+                        'Quote'
+                      )}</span> &nbsp; <span class="AIPRM__truncate">${formatHumanReadableNumber(
+                gpt.CountUses || 0
+              )}</span>
+                    </span>
+
+                    <span class="AIPRM__flex AIPRM__items-center AIPRM__truncate" title="Votes (${
+                      gpt.CountVotes || 0
+                    })">
+                      <a title="Votes (${
+                        gpt.CountVotes || 0
+                      }) - Vote for this GPT with thumbs up"
+                          class="AIPRM__p-1 AIPRM__rounded-md hover:AIPRM__bg-gray-100 hover:AIPRM__text-gray-700 dark:AIPRM__text-gray-400 dark:hover:AIPRM__bg-gray-700 dark:hover:AIPRM__text-gray-200 disabled:dark:hover:AIPRM__text-gray-400" onclick="event.stopPropagation(); AIPRM.voteGizmoThumbsUp('${sanitizeInput(
+                            gpt.GizmoCode
+                          )}')">${svg('ThumbUp')}</a>
+                      &nbsp; <span class="AIPRM__truncate">${formatHumanReadableNumber(
+                        gpt.CountVotes || 0
+                      )}</span>
+
+                      &nbsp; <a title="Votes (${
+                        gpt.CountVotes
+                      }) - Vote for this GPT with thumbs down"
+                            class="AIPRM__p-1 AIPRM__rounded-md hover:AIPRM__bg-gray-100 hover:AIPRM__text-gray-700 dark:AIPRM__text-gray-400 dark:hover:AIPRM__bg-gray-700 dark:hover:AIPRM__text-gray-200 disabled:dark:hover:AIPRM__text-gray-400" onclick="event.stopPropagation(); AIPRM.voteGizmoThumbsDown('${sanitizeInput(
+                              gpt.GizmoCode
+                            )}')">${svg('ThumbDown')}</a>
+                    </span>
+
+                    <span class="AIPRM__flex AIPRM__items-center" title="Copy link to this GPT">
+                      <a class="AIPRM__p-1 AIPRM__rounded-md hover:AIPRM__bg-gray-100 hover:AIPRM__text-gray-700 dark:AIPRM__text-gray-400 dark:hover:AIPRM__bg-gray-700 dark:hover:AIPRM__text-gray-200 disabled:dark:hover:AIPRM__text-gray-400" 
+                      onclick="event.stopPropagation(); AIPRM.copyGizmoDeepLink('https://chat.openai.com/g/${sanitizeInput(
+                        gpt.ShortURL
+                      )}')" title="Copy link to this GPT">
+                      ${svg('Link')}
+                      </a>
+                    </span>
+                  </div>
+                </button>`;
+            })
+            .join('')}          
+        </ul>
+
+        ${gizmos.length > this.GizmoSection.pageSize ? paginationContainer : ''}
+
+        <div class="AIPRM__h-px AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850"></div>
+      </div>
+    `;
+
+    gptsContainer
+      .querySelector('#gizmoSortBySelect')
+      .addEventListener('change', this.changeGizmoSortBy.bind(this));
+
+    gptsContainer
+      ?.querySelector('#gizmoSearchInput')
+      ?.addEventListener(
+        'input',
+        this.debounce(this.changeGizmoSearch.bind(this), 300).bind(this)
+      );
+
+    const pageSizeSelectElements = gptsContainer.querySelectorAll(
+      'select.gizmosPageSizeSelect'
+    );
+
+    // Add event listener for the pagination buttons and page size select elements
+    if (pageSizeSelectElements.length > 0) {
+      pageSizeSelectElements.forEach((select) => {
+        select.addEventListener('change', this.changeGizmoPageSize.bind(this));
+      });
+    }
   },
 
   // Apply layout changes based on config and type (general or specific only)
@@ -1958,7 +2878,7 @@ ${textContent}
     sidebarIcon.id = 'AIPRM__sidebar-icon';
 
     sidebarIcon.className =
-      'AIPRM__p-2 AIPRM__top-12 md:AIPRM__top-2 AIPRM__p-2 AIPRM__items-center AIPRM__transition-colors AIPRM__duration-200 AIPRM__cursor-pointer AIPRM__text-sm AIPRM__rounded-md AIPRM__border AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__border-black/10 dark:AIPRM__border-white/20 hover:AIPRM__bg-gray-50 dark:hover:AIPRM__bg-gray-700 AIPRM__cursor-pointer AIPRM__fixed AIPRM__right-4 AIPRM__z-30';
+      'AIPRM__p-2 AIPRM__top-12 md:AIPRM__top-2 AIPRM__p-2 AIPRM__items-center AIPRM__transition-colors AIPRM__duration-200 AIPRM__cursor-pointer AIPRM__text-sm AIPRM__rounded-md AIPRM__border AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__border-black/10 dark:AIPRM__border-white/20 hover:AIPRM__bg-gray-50 dark:hover:AIPRM__bg-gray-850 AIPRM__cursor-pointer AIPRM__fixed AIPRM__right-4 AIPRM__z-30';
 
     sidebarIcon.title = 'Open AIPRM sidebar';
 
@@ -1986,11 +2906,11 @@ ${textContent}
     sidebar.id = 'AIPRM__sidebar';
 
     sidebar.className =
-      '2xl:AIPRM__w-7/12 lg:AIPRM__w-3/4 md:AIPRM__w-11/12 AIPRM__w-full AIPRM__h-full AIPRM__bg-white AIPRM__text-gray-700 AIPRM__shadow-lg AIPRM__absolute AIPRM__right-0 AIPRM__overflow-auto AIPRM__z-20 dark:AIPRM__bg-gray-800 dark:AIPRM__text-white AIPRM__ease-in-out AIPRM__duration-300 AIPRM__translate-x-full';
+      '2xl:AIPRM__w-7/12 lg:AIPRM__w-3/4 md:AIPRM__w-11/12 AIPRM__w-full AIPRM__h-full AIPRM__bg-white AIPRM__text-gray-700 AIPRM__shadow-lg AIPRM__absolute AIPRM__right-0 AIPRM__overflow-auto AIPRM__z-20 dark:AIPRM__bg-gray-900 dark:AIPRM__text-white AIPRM__ease-in-out AIPRM__duration-300 AIPRM__translate-x-full dark:AIPRM__shadow-gray-600/50';
 
     sidebar.innerHTML = /*html*/ `
           <div class="AIPRM__relative" title="Close AIPRM sidebar" id="AIPRM__sidebar-container">
-            <div class="AIPRM__p-2 AIPRM__items-center AIPRM__transition-colors AIPRM__duration-200 AIPRM__cursor-pointer AIPRM__text-sm AIPRM__rounded-md AIPRM__border AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__border-black/10 dark:AIPRM__border-white/20 hover:AIPRM__bg-gray-50 dark:hover:AIPRM__bg-gray-700 AIPRM__absolute AIPRM__top-0 AIPRM__left-4 AIPRM__z-30" onclick="document.getElementById('AIPRM__sidebar-icon').click()">
+            <div class="AIPRM__p-2 AIPRM__items-center AIPRM__transition-colors AIPRM__duration-200 AIPRM__cursor-pointer AIPRM__text-sm AIPRM__rounded-md AIPRM__border AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__border-black/10 dark:AIPRM__border-white/20 hover:AIPRM__bg-gray-50 dark:hover:AIPRM__bg-gray-850 AIPRM__absolute AIPRM__top-0 AIPRM__left-4 AIPRM__z-30" onclick="document.getElementById('AIPRM__sidebar-icon').click()">
               <div class="AIPRM__invert dark:AIPRM__filter-none AIPRM__sidebar-icon AIPRM__w-12 AIPRM__h-12"></div>
             </div>
 
@@ -1999,13 +2919,8 @@ ${textContent}
         `;
 
     // Add sidebar icon and sidebar to the page
-    document
-      .querySelector('.flex.flex-col.text-sm.dark\\:bg-gray-800')
-      .appendChild(sidebarIcon);
-
-    document
-      .querySelector('.flex.flex-col.text-sm.dark\\:bg-gray-800')
-      .appendChild(sidebar);
+    document.querySelector(selectorConfig.Sidebar)?.appendChild(sidebarIcon);
+    document.querySelector(selectorConfig.Sidebar)?.appendChild(sidebar);
   },
 
   updateShareButton() {
@@ -2228,7 +3143,7 @@ ${textContent}
   },
 
   // save prompt template via API and update client state
-  async savePromptAsTemplate(e) {
+  async savePromptAsTemplate(promptPlugins = undefined, e) {
     e.preventDefault();
 
     // if it's basic mode -> build prompt template first (input with name createPromptMode in savePromptForm)
@@ -2244,6 +3159,11 @@ ${textContent}
     const prompt = {
       ModelS: [],
     };
+
+    if (promptPlugins) {
+      prompt.PluginS = promptPlugins;
+    }
+
     const formData = new FormData(e.target);
 
     for (const [key, value] of formData) {
@@ -2259,6 +3179,40 @@ ${textContent}
     if (this.promptRequiresLiveCrawling(prompt.Prompt)) {
       prompt.PromptFeatureBitset |= PromptFeatureBitset.LIVE_CRAWLING;
     }
+
+    const selectedGizmos = prompt.ModelS?.filter(
+      (modelID) => !this.Models.find((model) => model.ID === modelID)
+    );
+
+    // remove unselected Gizmos from Plugins, but leave private Gizmos
+    prompt.PluginS = prompt.PluginS?.filter((plugin) => {
+      const gizmo = this.Gizmos.find((gizmo) => gizmo.GizmoCode === plugin);
+      if (!gizmo) {
+        return true;
+      }
+
+      return selectedGizmos?.includes(gizmo.GizmoCode);
+    });
+
+    // add CurrentGizmo if selected
+    if (this.CurrentGizmo) {
+      const currentGizmoSelected = selectedGizmos?.includes(
+        this.CurrentGizmo.GizmoCode
+      );
+
+      if (currentGizmoSelected) {
+        if (prompt.PluginS == null) {
+          prompt.PluginS = [this.CurrentGizmo.GizmoCode];
+        } else if (!prompt.PluginS.includes(this.CurrentGizmo.GizmoCode)) {
+          prompt.PluginS.push(this.CurrentGizmo.GizmoCode);
+        }
+      }
+    }
+
+    // remove Gizmos from Models
+    prompt.ModelS = prompt.ModelS?.filter((modelID) =>
+      this.Models.find((model) => model.ID === modelID)
+    );
 
     // re-check user status
     await this.Client.checkUserStatus();
@@ -2281,7 +3235,8 @@ ${textContent}
           savedPrompt.ID,
           currentCreatePromptMode === CreatePromptMode.BASIC
             ? UsageTypeNo.CREATE_BASIC
-            : UsageTypeNo.CREATE_ADVANCED
+            : UsageTypeNo.CREATE_ADVANCED,
+          this.CurrentGizmo?.GizmoCode
         );
       }
 
@@ -2750,8 +3705,9 @@ ${textContent}
    * Show modal to save prompt as template
    *
    * @param {Event|null} e
+   * @param {string[]|null} promptPlugins
    */
-  async showSavePromptModal(e) {
+  async showSavePromptModal(e, promptPlugins) {
     let promptTemplate = '';
 
     const isEditPromptEvent = e && e.type === editPromptTemplateEvent;
@@ -2783,11 +3739,13 @@ ${textContent}
       // get the parent element of the button (the prompt container)
       const prompt =
         button.parentElement.parentElement.parentElement.querySelector(
-          '.whitespace-pre-wrap'
+          this.Config.getSelectorConfig().SavePromptAsTemplatePromptText
         );
 
       if (prompt) {
         promptTemplate = prompt.textContent;
+      } else {
+        console.error('showSavePromptModal: No prompt text found');
       }
     }
 
@@ -2800,7 +3758,7 @@ ${textContent}
 
       savePromptModal.addEventListener(
         'submit',
-        this.savePromptAsTemplate.bind(this)
+        this.savePromptAsTemplate.bind(this, promptPlugins)
       );
 
       document.body.appendChild(savePromptModal);
@@ -2830,7 +3788,7 @@ ${textContent}
 
     savePromptModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
@@ -2838,17 +3796,17 @@ ${textContent}
 
             <form id="savePromptForm">
               <div
-                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
                 role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
                 <div
-                  class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__overflow-y-auto">
+                  class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__overflow-y-auto">
 
                   <div class="AIPRM__flex AIPRM__justify-end AIPRM__mb-2 ${
                     e ? 'AIPRM__hidden' : ''
                   }">
                     <ul
-                      class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-900 AIPRM__flex AIPRM__gap-1 AIPRM__list-none AIPRM__p-1 AIPRM__relative AIPRM__rounded-xl AIPRM__text-gray-900 AIPRM__text-sm">
+                      class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 AIPRM__flex AIPRM__gap-1 AIPRM__list-none AIPRM__p-1 AIPRM__relative AIPRM__rounded-xl AIPRM__text-gray-900 AIPRM__text-sm">
                       <li>
                         <input class="AIPRM__hidden" type="radio" name="createPromptMode" id="createPromptModeBasic"
                           value="${CreatePromptMode.BASIC}" ${
@@ -2896,7 +3854,7 @@ ${textContent}
 
                     <label>Prompt Template</label>
                     <textarea name="Prompt"
-                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3"
+                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3"
                       style="height: 120px;" ${
                         isAdvancedMode ? ' required ' : ''
                       }
@@ -2910,7 +3868,7 @@ ${textContent}
                       isAdvancedMode ? ' required ' : ''
                     }
                       title="Short teaser for this prompt template, e.g. 'Create a keyword strategy and SEO content plan from 1 [KEYWORD]'"
-                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3"
+                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3"
                       style="height: 71px;"
                       placeholder="Create a keyword strategy and SEO content plan from 1 [KEYWORD]"></textarea>
 
@@ -2919,7 +3877,7 @@ ${textContent}
                       isAdvancedMode ? 'required' : ''
                     } type="text"
                       title="Prompt hint for this prompt template, e.g. '[KEYWORD]' or '[your list of keywords, maximum ca. 8000]"
-                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3"
+                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3"
                       placeholder="[KEYWORD] or [your list of keywords, maximum ca. 8000]" />
 
                     <label>Title</label>
@@ -2927,13 +3885,13 @@ ${textContent}
                       ${
                         isAdvancedMode ? 'required' : ''
                       } placeholder="Keyword Strategy"
-                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2" />
+                      class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2" />
 
                     <div class="AIPRM__flex">
                       <div class="AIPRM__mr-4 AIPRM__w-full">
                         <label>Topic</label>
                         <select name="Community"
-                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full"
+                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full"
                           ${isAdvancedMode ? ' required ' : ''}>
                           ${this.Topics.map(
                             (topic) => /*html*/ `
@@ -2948,7 +3906,7 @@ ${textContent}
                       <div class="AIPRM__w-full">
                         <label>Activity</label>
                         <select name="Category"
-                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full"
+                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full"
                           ${isAdvancedMode ? ' required ' : ''}>
                           ${this.getActivities(
                             this.PromptTopic === DefaultPromptTopic
@@ -2970,7 +3928,7 @@ ${textContent}
                       <div class="AIPRM__mr-4 AIPRM__w-full">
                         <label>Who can see this?</label>
                         <select name="PromptTypeNo"
-                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full"
+                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full"
                           ${isAdvancedMode ? ' required ' : ''}>
                           <option value="${
                             PromptTypeNo.PRIVATE
@@ -2988,7 +3946,24 @@ ${textContent}
                       <div class="AIPRM__w-full">
                         <label>Made for</label>
                         <select multiple multiselect-max-items="1" multiselect-hide-x="true" name="ModelS"
-                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full">
+                          class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full">
+                          
+                          ${
+                            this.CurrentGizmo
+                              ? /*html*/ `
+                              <option value="${sanitizeInput(
+                                this.CurrentGizmo.GizmoCode
+                              )}" AIPRMModelStatusNo="1" ${
+                                  isEditPromptEvent ? '' : 'selected'
+                                }>${sanitizeInput(
+                                  this.CurrentGizmo.Title
+                                )}</option>
+                              `
+                              : ''
+                          }
+
+                          ${this.addPluginsToMadeForDropdown(promptPlugins)}
+
                           ${this.Models.map(
                             (model) => /*html*/ `
                           <option value="${sanitizeInput(
@@ -3006,13 +3981,13 @@ ${textContent}
                         <div class="AIPRM__mr-4 AIPRM__w-full"><label>Author Name</label>
                           <input name="AuthorName" type="text" title="Author Name visible for all users"
                             placeholder="Author Name"
-                            class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
+                            class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
                         </div>
 
                         <div class="AIPRM__w-full"><label>Author URL</label>
                           <input name="AuthorURL" type="url" title="Author URL visible for all users"
                             placeholder="https://www.example.com/"
-                            class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
+                            class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
                         </div>
                       </div>
 
@@ -3029,7 +4004,7 @@ ${textContent}
 
                 </div>
 
-                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                   <button type="button"
                     class="AIPRM__bg-gray-600 hover:AIPRM__bg-gray-800 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white"
                     onclick="AIPRM.hideSavePromptModal()"> Cancel
@@ -3094,6 +4069,65 @@ ${textContent}
         this.hideSavePromptModal();
       }
     });
+  },
+
+  /**
+   * @param {string[] | undefined} plugins
+   */
+  addPluginsToMadeForDropdown(plugins = undefined) {
+    if (!plugins) {
+      return '';
+    }
+
+    return plugins
+      .map((plugin) => {
+        if (plugin === this.CurrentGizmo?.GizmoCode) {
+          //CurrentGizmo is handled separately
+          return '';
+        }
+
+        const gizmo = this.Gizmos.find((gizmo) => gizmo.GizmoCode === plugin);
+        if (!gizmo) {
+          return '';
+        }
+
+        return /*html*/ `
+        <option value="${sanitizeInput(
+          gizmo.GizmoCode
+        )}" AIPRMModelStatusNo="1" selected>
+          ${sanitizeInput(gizmo.Title)}
+        </option>`;
+      })
+      .join('');
+  },
+
+  /**
+   * @param {string[] | undefined} plugins
+   */
+  addPluginsToPromptCard(plugins = undefined) {
+    if (!plugins) {
+      return '';
+    }
+
+    return plugins
+      .map((plugin) => {
+        if (plugin === this.CurrentGizmo?.GizmoCode) {
+          //CurrentGizmo is handled separately
+          return '';
+        }
+
+        const gizmo = this.Gizmos.find((gizmo) => gizmo.GizmoCode === plugin);
+        if (!gizmo) {
+          return '';
+        }
+
+        return /*html*/ `
+        <span class="AIPRM__bg-green-100 AIPRM__text-green-800 AIPRM__text-xs AIPRM__font-medium AIPRM__mr-1 AIPRM__px-1.5 AIPRM__py-0.5 AIPRM__rounded dark:AIPRM__bg-green-900 dark:AIPRM__text-green-300" title="This prompt is optimized for Custom GPT: ${sanitizeInput(
+          gizmo.Title
+        )}">${sanitizeInput(gizmo.Title)}</span>
+      `;
+      })
+      .join('');
   },
 
   /**
@@ -3174,8 +4208,10 @@ ${textContent}
 
   // This function adds an "Export Button" to the sidebar
   addExportButton() {
+    const selectorConfig = this.Config.getSelectorConfig();
+
     // Get the nav element in the sidebar
-    const nav = document.querySelector('nav');
+    const nav = document.querySelector(selectorConfig.ExportButton);
     // If there is no nav element or the "Export Button" already exists, skip
     if (!nav || nav.querySelector('#export-button')) return;
 
@@ -3187,7 +4223,7 @@ ${textContent}
     button.onclick = this.exportCurrentChat.bind(this);
 
     // If there is no chat started, disable the button
-    if (document.querySelector('.flex-1.overflow-hidden h1')) {
+    if (document.querySelector(selectorConfig.ExportButtonChatStarted)) {
       button.style = 'pointer-events: none;opacity: 0.5';
     }
 
@@ -3197,6 +4233,9 @@ ${textContent}
     );
     // Insert the "Export Button" before the "Color Mode" button
     nav.insertBefore(button, colorModeButton);
+
+    // Create and insert the "Referral Button" element
+    this.Referrals.addSidebarButton(button);
 
     // Create the "Version" element
     const version = document.createElement('a');
@@ -3227,15 +4266,17 @@ ${textContent}
 
   // This function gets the "New Chat" buttons
   getNewChatButtons() {
+    const selectorConfig = this.Config.getSelectorConfig();
+
     // Get the sidebar and topbar elements
-    const sidebar = document.querySelector('nav');
-    const topbar = document.querySelector('.sticky');
+    const sidebar = document.querySelector(selectorConfig.NewChatSidebar);
+    const topbar = document.querySelector(selectorConfig.NewChatTopbar);
     // Get the "New Chat" button in the sidebar
     const newChatButton = [
-      ...(sidebar?.querySelectorAll('.cursor-pointer') ?? []),
-    ].find((e) => e.innerText === 'New chat');
+      ...(sidebar?.querySelectorAll(selectorConfig.NewChatSidebarButton) ?? []),
+    ].find((e) => e.innerText === selectorConfig.NewChatSidebarButtonText);
     // Get the "Plus" button in the topbar
-    const AddButton = topbar?.querySelector('button.px-3');
+    const AddButton = topbar?.querySelector(selectorConfig.NewChatTopbarButton);
     // Return an array containing the buttons, filtering out any null elements
     return [newChatButton, AddButton].filter((button) => button);
   },
@@ -3311,14 +4352,41 @@ ${textContent}
         (this.PromptActivity === DefaultPromptActivity ||
           template.Category === this.PromptActivity) &&
         (this.PromptModel === DefaultPromptModel ||
-          this.isTemplateForModel(template, this.PromptModel)) &&
+          this.isTemplateForModelOrPlugin(template, this.PromptModel)) &&
         (!this.PromptSearch ||
           template.Teaser.toLowerCase().includes(
             this.PromptSearch.toLowerCase()
           ) ||
           template.Title.toLowerCase().includes(
             this.PromptSearch.toLowerCase()
-          ))
+          ) ||
+          template.AuthorName.toLowerCase().includes(
+            this.PromptSearch.toLowerCase()
+          ) ||
+          template.ID == this.PromptSearch ||
+          template?._ID == this.PromptSearch)
+      );
+    });
+  },
+
+  /**
+   * Filter gizmos based on search query
+   *
+   * @param {Gizmo[]} gizmos
+   * @returns {Gizmo[]} filtered gizmos
+   */
+  filterGizmos(gizmos) {
+    return gizmos.filter((gizmo) => {
+      return (
+        !this.GizmoSearch ||
+        gizmo.Title.toLowerCase().includes(this.GizmoSearch.toLowerCase()) ||
+        gizmo.Description.toLowerCase().includes(
+          this.GizmoSearch.toLowerCase()
+        ) ||
+        gizmo.AuthorDisplayName.toLowerCase().includes(
+          this.GizmoSearch.toLowerCase()
+        ) ||
+        gizmo.ShortURL.toLowerCase().includes(this.GizmoSearch.toLowerCase())
       );
     });
   },
@@ -3380,6 +4448,7 @@ ${textContent}
     templates = await Promise.all(
       templates.map(async (template, index) => ({
         ...template,
+        _ID: template.ID,
         ID: index,
         IsHidden: await this.isHidden(template),
       }))
@@ -3407,17 +4476,34 @@ ${textContent}
     // Get the current page number and page size from the promptTemplateSection object
     const { currentPage, pageSize } = this.PromptTemplateSection;
 
+    let templatesWithGizmoStarterPrompts = [];
+    if (
+      this.PromptTemplatesType === PromptTemplatesType.PUBLIC &&
+      this.CurrentGizmo
+    ) {
+      // only show Gizmo starter prompts on Public tab
+      const gizmoStarterPrompts = this.CurrentGizmo?.PromptStarterS || [];
+      templatesWithGizmoStarterPrompts = [...gizmoStarterPrompts, ...templates];
+    } else {
+      templatesWithGizmoStarterPrompts = [...templates];
+    }
+
     // Calculate the start and end indices of the current page of prompt templates
     const start = pageSize * currentPage;
-    const end = Math.min(pageSize * (currentPage + 1), templates.length);
+    const end = Math.min(
+      pageSize * (currentPage + 1),
+      templatesWithGizmoStarterPrompts.length
+    );
 
     // Get the current page of prompt templates and add "IsFavorite" flag to each of the current templates
     const currentTemplates = await Promise.all(
-      templates.slice(start, end).map(async (template) => ({
-        ...template,
-        IsFavorite: await this.isFavorite(template.ID),
-        IsVerified: await this.isVerified(template.ID),
-      }))
+      templatesWithGizmoStarterPrompts
+        .slice(start, end)
+        .map(async (template) => ({
+          ...template,
+          IsFavorite: await this.isFavorite(template.ID),
+          IsVerified: await this.isVerified(template.ID),
+        }))
     );
 
     const favoritesList = this.Lists.getFavorites();
@@ -3443,7 +4529,7 @@ ${textContent}
     <div class="AIPRM__flex AIPRM__flex-1 AIPRM__gap-3.5 AIPRM__justify-between AIPRM__items-center AIPRM__flex-col sm:AIPRM__flex-row AIPRM__mt-6">
       <div class="AIPRM__text-left" style="margin-top: -1rem;">
         <label class="AIPRM__block AIPRM__text-sm AIPRM__font-medium" title="The number of prompt templates per page">Prompts per Page</label>
-        <select class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-900 pageSizeSelect">
+        <select class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800 pageSizeSelect">
           ${pageSizeOptions
             .map(
               (pageSize) => /*html*/ `
@@ -3461,7 +4547,7 @@ ${textContent}
         Showing <span class="${css`paginationNumber`}">${
       start + 1
     }</span> to <span class="${css`paginationNumber`}">${end}</span> of <span class="${css`paginationNumber`}">${
-      templates.length
+      templatesWithGizmoStarterPrompts.length
     } Prompts</span>
       </span>
       <div class="${css`paginationButtonGroup`}">
@@ -3481,7 +4567,7 @@ ${textContent}
           ? /*html*/ `
           <div class="lg:AIPRM__absolute AIPRM__top-0 AIPRM__right-0 AIPRM__text-right">
             <a title="Close AIPRM sidebar"
-              class="AIPRM__p-2 AIPRM__cursor-pointer AIPRM__align-middle AIPRM__inline-block AIPRM__rounded-md hover:AIPRM__bg-gray-100 hover:AIPRM__text-gray-700 dark:AIPRM__text-gray-400 dark:hover:AIPRM__bg-gray-700 dark:hover:AIPRM__text-gray-200 disabled:dark:hover:AIPRM__text-gray-400" 
+              class="AIPRM__p-2 AIPRM__cursor-pointer AIPRM__align-middle AIPRM__inline-block AIPRM__rounded-md hover:AIPRM__bg-gray-100 hover:AIPRM__text-gray-700 dark:AIPRM__text-gray-400 dark:hover:AIPRM__bg-gray-850 dark:hover:AIPRM__text-gray-200 disabled:dark:hover:AIPRM__text-gray-400" 
               onclick="event.stopPropagation(); document.getElementById('AIPRM__sidebar-icon').click()">
               ${svg('CrossExtraLarge')}
             </a>
@@ -3514,7 +4600,7 @@ ${textContent}
                     <input type="checkbox" value="" class="AIPRM__sr-only AIPRM__peer" id="adminMode" onchange="AIPRM.toggleAdminMode()" ${
                       this.AdminMode ? ' checked' : ''
                     }>
-                    <div class="AIPRM__w-9 AIPRM__h-5 AIPRM__bg-gray-200 peer-focus:AIPRM__outline-none AIPRM__rounded-full AIPRM__peer dark:AIPRM__bg-gray-700 peer-checked:after:AIPRM__translate-x-full peer-checked:after:AIPRM__border-white after:AIPRM__content-[''] after:AIPRM__absolute after:AIPRM__top-[2px] after:AIPRM__left-[2px] after:AIPRM__bg-white after:AIPRM__border-gray-300 after:AIPRM__border after:AIPRM__rounded-full after:AIPRM__h-4 after:AIPRM__w-4 after:AIPRM__transition-all dark:AIPRM__border-gray-600 peer-checked:AIPRM__bg-gray-600"></div>
+                    <div class="AIPRM__w-9 AIPRM__h-5 AIPRM__bg-gray-200 peer-focus:AIPRM__outline-none AIPRM__rounded-full AIPRM__peer dark:AIPRM__bg-gray-850 peer-checked:after:AIPRM__translate-x-full peer-checked:after:AIPRM__border-white after:AIPRM__content-[''] after:AIPRM__absolute after:AIPRM__top-[2px] after:AIPRM__left-[2px] after:AIPRM__bg-white after:AIPRM__border-gray-300 after:AIPRM__border after:AIPRM__rounded-full after:AIPRM__h-4 after:AIPRM__w-4 after:AIPRM__transition-all dark:AIPRM__border-gray-600 peer-checked:AIPRM__bg-gray-600"></div>
                     <span class="AIPRM__ml-3 AIPRM__text-sm AIPRM__font-medium AIPRM__text-gray-900 dark:AIPRM__text-gray-300"></span>
                   </label>
                 `
@@ -3549,7 +4635,7 @@ ${textContent}
                 this.PromptTemplatesList === favoritesList.ID
                   ? 'AIPRM__bg-gray-50 dark:AIPRM__bg-white/5'
                   : ''
-              } dark:hover:AIPRM__bg-gray-900 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__w-full">
+              } dark:hover:AIPRM__bg-gray-800 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__w-full">
               ${svg('StarSolidLarge')} &nbsp; Favorites 
             </a>
           </li>
@@ -3565,7 +4651,7 @@ ${textContent}
                 this.PromptTemplatesList === AIPRMVerifiedList?.ID
                   ? 'AIPRM__bg-gray-50 dark:AIPRM__bg-white/5'
                   : ''
-              } dark:hover:AIPRM__bg-gray-900 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__w-full">
+              } dark:hover:AIPRM__bg-gray-800 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__w-full">
               ${svg('CheckBadgeSolidLarge')} &nbsp; AIPRM
             </a>
           </li>
@@ -3578,7 +4664,7 @@ ${textContent}
               this.PromptTemplatesType === PromptTemplatesType.PUBLIC
                 ? 'AIPRM__bg-gray-50 dark:AIPRM__bg-white/5'
                 : ''
-            } dark:hover:AIPRM__bg-gray-900 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__inline-block AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__w-full">
+            } dark:hover:AIPRM__bg-gray-800 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__inline-block AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__w-full">
               Public
             </a>
           </li>
@@ -3591,7 +4677,7 @@ ${textContent}
               this.PromptTemplatesType === PromptTemplatesType.OWN
                 ? 'AIPRM__bg-gray-50 dark:AIPRM__bg-white/5'
                 : ''
-            } dark:hover:AIPRM__bg-gray-900 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__inline-block AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__w-full">
+            } dark:hover:AIPRM__bg-gray-800 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__inline-block AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__w-full">
               Own
             </a>
           </li>
@@ -3613,7 +4699,7 @@ ${textContent}
                         this.PromptTemplatesList === list.ID
                           ? 'AIPRM__bg-gray-50 dark:AIPRM__bg-white/5'
                           : ''
-                      } dark:hover:AIPRM__bg-gray-900 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__gap-2 AIPRM__w-full"> 
+                      } dark:hover:AIPRM__bg-gray-800 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__gap-2 AIPRM__w-full"> 
                       ${
                         list.ListTypeNo === ListTypeNo.TEAM_CUSTOM
                           ? list.HasWriteAccessForTeamMember(
@@ -3645,7 +4731,7 @@ ${textContent}
               this.PromptTemplatesList === hiddenList.ID
                 ? 'AIPRM__bg-gray-50 dark:AIPRM__bg-white/5'
                 : ''
-            } dark:hover:AIPRM__bg-gray-900 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__w-full">
+            } dark:hover:AIPRM__bg-gray-800 dark:hover:AIPRM__text-gray-300 hover:AIPRM__bg-gray-50 hover:AIPRM__text-gray-600 AIPRM__p-4 AIPRM__rounded-t-lg AIPRM__flex AIPRM__justify-center AIPRM__w-full">
               ${svg('EyeSlash')} &nbsp; Hidden
             </a>
           </li>
@@ -3653,7 +4739,7 @@ ${textContent}
           <li class="AIPRM__flex-1">
             <a href="#" id="addNewListTab" title="Create New List" 
             onclick="AIPRM.showListCreateModal()" 
-            class="AIPRM__rounded AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__m-2 AIPRM__p-2 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-900">
+            class="AIPRM__rounded AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__m-2 AIPRM__p-2 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-800">
             ${svg('Plus')} &nbsp; Add List
             </a>
           </li>
@@ -3663,7 +4749,7 @@ ${textContent}
           <div>
             <label for="topicSelect" class="AIPRM__block AIPRM__text-sm AIPRM__font-medium">Topic</label>
         
-            <select id="topicSelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-900">
+            <select id="topicSelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800">
               <option value="${DefaultPromptTopic}" 
               ${
                 this.PromptTopic === DefaultPromptTopic ? 'selected' : ''
@@ -3681,7 +4767,7 @@ ${textContent}
           <div>
             <label for="activitySelect" class="AIPRM__block AIPRM__text-sm AIPRM__font-medium">Activity</label>
         
-            <select id="activitySelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-900">
+            <select id="activitySelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800">
               <option value="${DefaultPromptActivity}" 
               ${
                 this.PromptActivity === DefaultPromptActivity ? 'selected' : ''
@@ -3701,7 +4787,7 @@ ${textContent}
           <div>
             <label for="sortBySelect" class="AIPRM__block AIPRM__text-sm AIPRM__font-medium">Sort by</label>
         
-            <select id="sortBySelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-900">
+            <select id="sortBySelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800">
               ${Object.keys(SortModeNo)
                 .map(
                   (sortMode) => /*html*/ `
@@ -3718,11 +4804,28 @@ ${textContent}
           <div>
             <label for="modelSelect" class="AIPRM__block AIPRM__text-sm AIPRM__font-medium">Model</label>
         
-            <select id="modelSelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-900">
+            <select id="modelSelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 dark:hover:AIPRM__bg-gray-800">
               <option value="${DefaultPromptModel}" 
               ${
                 this.PromptModel === DefaultPromptModel ? 'selected' : ''
               }>Not specific</option>
+
+              ${
+                this.CurrentGizmo
+                  ? /*html*/ `
+                  <optgroup label="Current GPT">
+                    <option value="${sanitizeInput(
+                      this.CurrentGizmo.GizmoCode
+                    )}" ${
+                      this.PromptModel === this.CurrentGizmo.GizmoCode
+                        ? 'selected'
+                        : ''
+                    }>${sanitizeInput(this.CurrentGizmo.Title)}</option>
+                  </optgroup>
+                  <optgroup label="ChatGPT Models">
+                  `
+                  : ''
+              }
 
               ${this.ModelsActive.map(
                 (model) =>
@@ -3730,16 +4833,18 @@ ${textContent}
                     this.PromptModel === model.ID ? 'selected' : ''
                   }>${sanitizeInput(model.LabelUser)}</option>`
               ).join('')}
+
+              ${this.CurrentGizmo ? /*html*/ `</optgroup>` : ''}
             </select>
           </div>
 
           <div class="AIPRM__whitespace-nowrap AIPRM__flex">
             <button title="Create New Prompt" 
               onclick="event.preventDefault(); AIPRM.createNewPrompt()" 
-              class="AIPRM__rounded AIPRM__justify-center AIPRM__items-center AIPRM__hidden lg:AIPRM__inline-block AIPRM__mr-1 AIPRM__p-2 AIPRM__px-2.5 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-900">
+              class="AIPRM__rounded AIPRM__justify-center AIPRM__items-center AIPRM__hidden lg:AIPRM__inline-block AIPRM__mr-1 AIPRM__p-2 AIPRM__px-2.5 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-800">
               ${svg('Plus')}
             </button>
-            <input id="promptSearchInput" type="search" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__inline-block AIPRM__w-full dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 lg:AIPRM__w-[260px]" placeholder="Search" 
+            <input id="promptSearchInput" type="search" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded AIPRM__inline-block AIPRM__w-full dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 lg:AIPRM__w-[260px] dark:hover:AIPRM__bg-gray-800" placeholder="Search" 
             value="${sanitizeInput(
               this.PromptSearch
             )}" onfocus="this.value = this.value">
@@ -3748,30 +4853,39 @@ ${textContent}
           <div class="lg:AIPRM__hidden">
             <button title="Create New Prompt" 
               onclick="event.preventDefault(); AIPRM.createNewPrompt()" 
-              class="AIPRM__rounded AIPRM__w-full AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__p-2 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-900">
+              class="AIPRM__rounded AIPRM__w-full AIPRM__flex AIPRM__justify-center AIPRM__items-center AIPRM__p-2 AIPRM__font-medium AIPRM__text-gray-800 AIPRM__bg-gray-100 hover:AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:AIPRM__text-gray-400 dark:hover:AIPRM__text-white dark:hover:AIPRM__bg-gray-800">
               ${svg('Plus')} &nbsp; Add Prompt
             </button>
           </div>
         </div>
 
         ${
-          templates.length > this.PromptTemplateSection.pageSize
+          templatesWithGizmoStarterPrompts.length >
+          this.PromptTemplateSection.pageSize
             ? paginationContainer
             : ''
         }
-
-        ${this.handleNoPromptsInViewMessage(
-          currentTemplates,
-          isFavoritesListView,
-          selectedList
-        )}
 
         <ul class="${css`ul`} AIPRM__grid AIPRM__grid-cols-1 lg:AIPRM__grid-cols-2 ${
       !isSidebarView ? '2xl:AIPRM__grid-cols-4' : ''
     }">
           ${currentTemplates
-            .map(
-              (template) => /*html*/ `
+            .map((template) =>
+              template.IsGizmoStarterPrompt
+                ? /*html*/ `<button onclick="AIPRM.useGizmoStarterPrompt('${
+                    template.ID
+                  }')" class="${css`card`} AIPRM__relative AIPRM__group">
+
+                  <h3 class="${css`h3`}" style="overflow-wrap: anywhere;">
+                    ${sanitizeInput(template.Prompt)}
+                  </h3>
+
+                  <div class="AIPRM__-mt-0.5 AIPRM__text-gray-500 AIPRM__text-xs AIPRM__pb-1 AIPRM__max-w-full AIPRM__w-full">
+                    (${sanitizeInput(template.Title)})
+                  </div>
+                </button>
+                `
+                : /*html*/ `
             <button onclick="AIPRM.selectPromptTemplateByIndex(${
               template.ID
             })" class="${css`card`} AIPRM__relative AIPRM__group">
@@ -3817,8 +4931,8 @@ ${textContent}
 
               <div class="AIPRM__flex AIPRM__items-start AIPRM__w-full AIPRM__justify-between">
                 <h3 class="${css`h3`}" style="overflow-wrap: anywhere; ${
-                template.IsVerified ? 'padding-right: 30px;' : ''
-              }">
+                    template.IsVerified ? 'padding-right: 30px;' : ''
+                  }">
                   ${sanitizeInput(template.Title)}
                   ${
                     template.IsVerified
@@ -3938,8 +5052,8 @@ ${textContent}
                 <span title="Last updated on ${formatDateTime(
                   template.RevisionTime
                 )}" class="AIPRM__mx-1">${formatAgo(
-                template.RevisionTime
-              )}</span>
+                    template.RevisionTime
+                  )}</span>
 
                 ${
                   template.ForkedFromPromptID
@@ -3964,6 +5078,20 @@ ${textContent}
                     `
                     : ''
                 }
+
+                ${
+                  this.CurrentGizmo &&
+                  template.PluginS?.includes(this.CurrentGizmo.GizmoCode)
+                    ? /*html*/ `
+                    <span class="AIPRM__bg-green-100 AIPRM__text-green-800 AIPRM__text-xs AIPRM__font-medium AIPRM__mr-1 AIPRM__px-1.5 AIPRM__py-0.5 AIPRM__rounded dark:AIPRM__bg-green-900 dark:AIPRM__text-green-300" title="This prompt is optimized for ${sanitizeInput(
+                      this.CurrentGizmo.Title
+                    )}">${sanitizeInput(this.CurrentGizmo.Title)}</span>
+                  `
+                    : ''
+                }
+
+
+                ${this.addPluginsToPromptCard(template.PluginS)}
 
                 ${(template.ModelS || [])
                   .map((modelID) => {
@@ -4093,9 +5221,16 @@ ${textContent}
               : ''
           }
         </ul>
+
+        ${this.handleNoPromptsInViewMessage(
+          templates,
+          isFavoritesListView,
+          selectedList
+        )}
     
         ${
-          templates.length > this.PromptTemplateSection.pageSize
+          templatesWithGizmoStarterPrompts.length >
+          this.PromptTemplateSection.pageSize
             ? paginationContainer
             : ''
         }
@@ -4107,8 +5242,9 @@ ${textContent}
 
     let wrapper = document.createElement('div');
     wrapper.id = 'templates-wrapper';
-    wrapper.className =
-      'AIPRM__mt-6 md:AIPRM__flex AIPRM__items-start AIPRM__text-center AIPRM__gap-2.5 AIPRM__max-w-full AIPRM__m-auto sm:AIPRM__mx-4 AIPRM__text-sm';
+    wrapper.className = `AIPRM__mt-6 md:AIPRM__flex AIPRM__items-start AIPRM__text-center AIPRM__gap-2.5 AIPRM__max-w-full AIPRM__m-auto sm:AIPRM__mx-4 AIPRM__text-sm ${
+      !isSidebarView ? ' AIPRM__pt-16' : ''
+    }`;
 
     if (parent.querySelector('#templates-wrapper')) {
       wrapper = parent.querySelector('#templates-wrapper');
@@ -4183,8 +5319,8 @@ ${textContent}
     ) {
       return /*html*/ `
         <div class="AIPRM__w-full AIPRM__my-8">
-          <div class="AIPRM__font-semibold AIPRM__text-xl">No prompts found for your current filter.</div>
-          <div>Please reset your filters to view all prompts.</div>
+          <div class="AIPRM__font-semibold AIPRM__text-xl">No AIPRM prompts found for your current filter.</div>
+          <div>Please reset your filters to view all AIPRM prompts.</div>
           <a class="AIPRM__underline" href="#" title="Reset filters" onclick="event.stopPropagation(); AIPRM.resetFilters();">Click here to reset filters</a>
         </div>
       `;
@@ -4238,6 +5374,63 @@ ${textContent}
         </div>`;
       }
     }
+  },
+
+  createGizmoStarterPrompts() {
+    if (!this.CurrentGizmo) {
+      return [];
+    }
+
+    const gizmo = this.Gizmos?.find(
+      (g) => g.GizmoCode === this.CurrentGizmo.GizmoCode
+    );
+    if (!gizmo) {
+      // we do not have Gizmo yet in list
+      return [];
+    }
+
+    let idIndex = 0;
+    return gizmo.PromptStarterS.map((p) => {
+      return {
+        ID: 'g-' + idIndex++, // we need to have unique ID for each PromptStarter - also different from normal AIPRM prompts
+        Title: gizmo.Title + ' starter prompt',
+        Prompt: p,
+        IsGizmoStarterPrompt: true,
+      };
+    });
+  },
+
+  useGizmoStarterPrompt(starterPromptID) {
+    if (!this.CurrentGizmo) {
+      console.error('useGizmoStarterPrompt: No current gizmo');
+      return;
+    }
+
+    const starterPrompt = this.CurrentGizmo.PromptStarterS.find(
+      (p) => p.ID === starterPromptID
+    );
+    if (!starterPrompt) {
+      console.error('useGizmoStarterPrompt: No starter prompt with ID');
+      return;
+    }
+
+    // Get the prompt textarea input
+    const textarea = document.querySelector(
+      this.Config.getSelectorConfig().PromptTextarea
+    );
+
+    // If there is no textarea, skip
+    if (!textarea) {
+      console.error('useGizmoStarterPrompt: No textarea found');
+      return;
+    }
+
+    // Add the continue action prompt to the textarea
+    textarea.value = starterPrompt.Prompt;
+    textarea.focus();
+
+    // Dispatch the input event to trigger the event listeners and enable the "Submit" button
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
   },
 
   /** @param {List} list */
@@ -4377,19 +5570,19 @@ ${textContent}
 
     shareListWithTeamModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-      <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+      <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
       </div>
 
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
         <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
           <form>
             <div
-              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
               role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
-              <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__w-96">
+              <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__w-96">
                 <label>Share with Team</label>
-                <select id="shareListWithTeamSelectTeam" name="shareListWithTeamSelectTeam" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full">
+                <select id="shareListWithTeamSelectTeam" name="shareListWithTeamSelectTeam" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full">
                   ${
                     this.Client.OwnTeamS?.length > 0
                       ? this.Client.OwnTeamS.map(
@@ -4409,7 +5602,7 @@ ${textContent}
                 }
               </div>
 
-              <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+              <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                 <button type="button" class="AIPRM__bg-gray-600 hover:AIPRM__bg-gray-800 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white"
                         onclick="AIPRM.hideShareListWithTeamModal()"> Cancel
                 </button>
@@ -4501,6 +5694,13 @@ ${textContent}
     }
   },
 
+  resetGizmoFilters() {
+    this.GizmoSearch = '';
+    this.GizmoSection.currentPage = 0;
+
+    this.insertGizmosSection();
+  },
+
   /**
    * boundHandleArrowKey is the bound version of the handleArrowKey function
    *
@@ -4547,6 +5747,22 @@ ${textContent}
     await this.insertPromptTemplatesSection();
   },
 
+  // changeGizmoPageSize updates the this.GizmoSection.pageSize variable and re-renders the gizmos
+  async changeGizmoPageSize(e) {
+    let pageSize = +e.target.value;
+
+    // if the pageSize is not in the pageSizeOptions array, use the default pageSize option
+    pageSize = pageSizeOptions.includes(pageSize) ? pageSize : pageSizeDefault;
+
+    // persist the last selected page size in local storage
+    localStorage.setItem(lastGizmoPageSizeKey, pageSize);
+
+    this.GizmoSection.currentPage = 0;
+    this.GizmoSection.pageSize = pageSize;
+
+    this.insertGizmosSection();
+  },
+
   // changePromptTopic updates the this.PromptTopic variable and reloads the templates & messages
   async changePromptTopic(e) {
     this.PromptTopic = e.target.value;
@@ -4583,6 +5799,15 @@ ${textContent}
     this.fetchPromptTemplates();
   },
 
+  // changeGizmoSortBy updates the this.GizmoSortMode variable and reloads the gizmos
+  changeGizmoSortBy(e) {
+    this.GizmoSortMode = +e.target.value;
+
+    this.GizmoSection.currentPage = 0;
+
+    this.fetchGizmos();
+  },
+
   // changePromptModel updates the this.PromptModel variable and reloads the templates
   async changePromptModel(e) {
     this.PromptModel = e.target.value;
@@ -4609,6 +5834,23 @@ ${textContent}
       searchInput.value.length;
     searchInput.focus();
   },
+
+  // changePromptSearch updates the this.GizmoSearch variable and re-renders the gizmos
+  changeGizmoSearch(e) {
+    this.GizmoSearch = e.target.value;
+
+    this.GizmoSection.currentPage = 0;
+
+    this.insertGizmosSection();
+
+    const searchInput = document.querySelector('#gizmoSearchInput');
+
+    searchInput.selectionStart = searchInput.selectionEnd =
+      searchInput.value.length;
+
+    searchInput.focus();
+  },
+
   /**
    * changePromptTemplatesType updates PromptTemplatesType and PromptTemplatesList and re-renders the templates
    *
@@ -4662,10 +5904,10 @@ ${textContent}
       return;
     }
 
+    const selectorConfig = this.Config.getSelectorConfig();
+
     // Get the prompt textarea input
-    const textarea = document.querySelector(
-      `form textarea:not([name^="${variableIDPrefix}"])`
-    );
+    const textarea = document.querySelector(selectorConfig.PromptTextarea);
 
     // If there is no textarea, skip
     if (!textarea) {
@@ -4674,7 +5916,7 @@ ${textContent}
     }
 
     // Hide the spacer for absolutely positioned prompt input
-    const spacer = document.querySelector('.h-32.md\\:h-48.flex-shrink-0');
+    const spacer = document.querySelector(selectorConfig.LangWrapperSpacer);
 
     if (spacer) {
       spacer.style = 'display: none';
@@ -4850,10 +6092,10 @@ ${textContent}
 
   // Insert the "Include My Profile info" below prompt textarea
   insertIncludeMyProfileInfo() {
+    const selectorConfig = this.Config.getSelectorConfig();
+
     // Get the prompt textarea input
-    const textarea = document.querySelector(
-      `form textarea:not([name^="${variableIDPrefix}"])`
-    );
+    const textarea = document.querySelector(selectorConfig.PromptTextarea);
 
     // If there is no textarea, skip
     if (!textarea) {
@@ -4862,8 +6104,7 @@ ${textContent}
     }
 
     // select last button element for parent element of textarea
-    let buttons = textarea.parentElement.querySelectorAll('button');
-    let button = buttons && buttons.length ? buttons[buttons.length - 1] : null;
+    let button = document.querySelector(selectorConfig.PromptSubmitButton);
 
     // If the button is not found, skip
     if (
@@ -4900,7 +6141,7 @@ ${textContent}
     wrapper.innerHTML = /*html*/ `
       <label class="AIPRM__text-sm AIPRM__items-center AIPRM__mx-2"
         title="Include provided &quot;My Profile&quot; info that you would like ChatGPT to know and remember about you and your preferences.">
-        <input name="includeMyProfile" type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-700" 
+        <input name="includeMyProfile" type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-850" 
           ${this.IncludeMyProfileMessage ? 'checked' : ''} ${
       this.MyProfileInfos.length > 0 ? '' : 'disabled'
     } />
@@ -4908,7 +6149,7 @@ ${textContent}
       </label>
 
       <div id="includeMyProfileInfoSelectWrapper" class="AIPRM__inline-block AIPRM__group">
-        <select id="includeMyProfileInfoSelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded dark:AIPRM__bg-gray-600 dark:AIPRM__border-gray-600 dark:group-hover:AIPRM__bg-gray-900 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white group-hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 sm:AIPRM__max-w-xs AIPRM__max-w-[6rem] ${
+        <select id="includeMyProfileInfoSelect" class="AIPRM__bg-gray-100 AIPRM__border-0 AIPRM__text-sm AIPRM__rounded dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-600 dark:group-hover:AIPRM__bg-gray-800 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white group-hover:AIPRM__bg-gray-200 focus:AIPRM__ring-0 sm:AIPRM__max-w-xs AIPRM__max-w-[6rem] ${
           !this.MyProfileInfos.length ? 'AIPRM__pointer-events-none' : ''
         }" 
           ${this.IncludeMyProfileMessage ? '' : 'disabled'}>
@@ -5085,7 +6326,11 @@ ${textContent}
     }
 
     // Track usage of continue action
-    this.Client.usePrompt(`${continueAction.ID}`, UsageTypeNo.SEND);
+    this.Client.usePrompt(
+      `${continueAction.ID}`,
+      UsageTypeNo.SEND,
+      this.CurrentGizmo?.GizmoCode
+    );
 
     // Submit the continue action prompt
     this.submitContinueActionPrompt(continueAction.Prompt);
@@ -5098,9 +6343,9 @@ ${textContent}
 
   // Submit the continue action prompt to ChatGPT
   submitContinueActionPrompt(prompt = '') {
-    const textarea = document.querySelector(
-      `form textarea:not([name^="${variableIDPrefix}"])`
-    );
+    const selectorConfig = this.Config.getSelectorConfig();
+
+    const textarea = document.querySelector(selectorConfig.PromptTextarea);
 
     // If the textarea is not empty and it's not "Continue writing please" - ask for confirmation
     if (
@@ -5121,13 +6366,7 @@ ${textContent}
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
 
     // select last button element for parent element of textarea
-    let buttons = textarea.parentElement.querySelectorAll('button');
-    let button = buttons && buttons.length ? buttons[buttons.length - 1] : null;
-
-    // Enable button if it's disabled
-    if (button.disabled) {
-      button.disabled = false;
-    }
+    let button = document.querySelector(selectorConfig.PromptSubmitButton);
 
     // If the button is not found, skip
     if (
@@ -5135,7 +6374,13 @@ ${textContent}
       !button.tagName ||
       button.tagName.toLowerCase() !== 'button'
     ) {
+      console.error('submitContinueActionPrompt: No button found');
       return;
+    }
+
+    // Enable button if it's disabled
+    if (button.disabled) {
+      button.disabled = false;
     }
 
     // Click the "Submit" button with a delay of 500ms
@@ -5185,13 +6430,28 @@ ${textContent}
     // Filter templates based on selected activity and search query
     templates = await this.filterPromptTemplates(templates);
 
+    let templatesWithGizmoStarterPrompts = [];
+    if (
+      this.PromptTemplatesType === PromptTemplatesType.PUBLIC &&
+      this.CurrentGizmo
+    ) {
+      // only show Gizmo starter prompts on Public tab
+      const gizmoStarterPrompts = this.CurrentGizmo?.PromptStarterS || [];
+      templatesWithGizmoStarterPrompts = [...gizmoStarterPrompts, ...templates];
+    } else {
+      templatesWithGizmoStarterPrompts = [...templates];
+    }
+
     // If there are no templates, skip
-    if (templates.length === 0) return;
+    if (templatesWithGizmoStarterPrompts.length === 0) return;
 
     this.PromptTemplateSection.currentPage++;
 
     this.PromptTemplateSection.currentPage = Math.min(
-      Math.floor((templates.length - 1) / this.PromptTemplateSection.pageSize),
+      Math.floor(
+        (templatesWithGizmoStarterPrompts.length - 1) /
+          this.PromptTemplateSection.pageSize
+      ),
       this.PromptTemplateSection.currentPage
     );
 
@@ -5199,10 +6459,46 @@ ${textContent}
     await this.insertPromptTemplatesSection();
   },
 
+  // Decrement the current page of the gizmos section and re-render
+  async prevGizmosPage() {
+    this.GizmoSection.currentPage--;
+    this.GizmoSection.currentPage = Math.max(0, this.GizmoSection.currentPage);
+
+    // Update the section
+    this.insertGizmosSection();
+  },
+
+  // nextGizmosPage increments the current page and re-renders the gizmos
+  async nextGizmosPage() {
+    let gizmos = this.Gizmos;
+
+    if (!gizmos || !Array.isArray(gizmos)) return;
+
+    // Filter templates based on selected activity and search query
+    gizmos = this.filterGizmos(gizmos);
+
+    // If there are no templates, skip
+    if (gizmos.length === 0) return;
+
+    this.GizmoSection.currentPage++;
+
+    this.GizmoSection.currentPage = Math.min(
+      Math.floor((gizmos.length - 1) / this.GizmoSection.pageSize),
+      this.GizmoSection.currentPage
+    );
+
+    // Update the section
+    this.insertGizmosSection();
+  },
+
   // Export the current chat log to a file
   exportCurrentChat() {
     // unknown prompt ID - use hardcoded prompt ID = UsageTypeNo.EXPORT
-    this.Client.usePrompt(`${UsageTypeNo.EXPORT}`, UsageTypeNo.EXPORT);
+    this.Client.usePrompt(
+      `${UsageTypeNo.EXPORT}`,
+      UsageTypeNo.EXPORT,
+      this.CurrentGizmo?.GizmoCode
+    );
 
     const selectorConfig = this.Config.getSelectorConfig();
 
@@ -5211,7 +6507,9 @@ ${textContent}
     ];
 
     let markdown = blocks.map((block) => {
-      let wrapper = block.querySelector('.whitespace-pre-wrap');
+      let wrapper = block.querySelector(
+        selectorConfig.ConversationResponseWrapper
+      );
 
       if (!wrapper) {
         return '';
@@ -5335,7 +6633,10 @@ ${textContent}
       return;
     }
 
-    await this.showSavePromptModal(new CustomEvent(editPromptTemplateEvent));
+    await this.showSavePromptModal(
+      new CustomEvent(editPromptTemplateEvent),
+      prompt.PluginS
+    );
 
     // Pre-fill the prompt template modal with the prompt template
     const form = document.getElementById('savePromptForm');
@@ -5383,9 +6684,17 @@ ${textContent}
   },
 
   prepareModelsMultiselect(prompt, form) {
+    const currentGizmo = this.CurrentGizmo;
     const optionsModelS = Array.from(form.elements['ModelS'].options);
+
     optionsModelS?.forEach(function (o) {
-      if (prompt.ModelS?.find((c) => c == o.value)) {
+      if (
+        currentGizmo &&
+        o.value === currentGizmo.GizmoCode &&
+        prompt.PluginS?.find((c) => c == o.value)
+      ) {
+        o.selected = true;
+      } else if (prompt.ModelS?.find((c) => c == o.value)) {
         o.selected = true;
       } else if (
         o.attributes['AIPRMModelStatusNo']?.value != ModelStatusNo.ACTIVE
@@ -5456,7 +6765,8 @@ ${textContent}
         (
           await this.getCurrentPromptTemplates()
         )[idx].ID,
-        1
+        1,
+        this.CurrentGizmo?.GizmoCode
       );
     } catch (error) {
       this.showNotification(
@@ -5479,6 +6789,51 @@ ${textContent}
         (
           await this.getCurrentPromptTemplates()
         )[idx].ID,
+        -1,
+        this.CurrentGizmo?.GizmoCode
+      );
+    } catch (error) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Something went wrong. Please try again.'
+      );
+      return;
+    }
+
+    this.showNotification(
+      NotificationSeverity.SUCCESS,
+      'Thanks for your vote!'
+    );
+  },
+
+  // Vote for a gizmo with a thumbs up
+  async voteGizmoThumbsUp(GizmoCode) {
+    try {
+      await this.Client.voteForGizmo(
+        GizmoCode,
+        GizmoVoteTypeNo.TEASER_THUMBS,
+        1
+      );
+    } catch (error) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Something went wrong. Please try again.'
+      );
+      return;
+    }
+
+    this.showNotification(
+      NotificationSeverity.SUCCESS,
+      'Thanks for your vote!'
+    );
+  },
+
+  // Vote for a gizmo with a thumbs down
+  async voteGizmoThumbsDown(GizmoCode) {
+    try {
+      await this.Client.voteForGizmo(
+        GizmoCode,
+        GizmoVoteTypeNo.TEASER_THUMBS,
         -1
       );
     } catch (error) {
@@ -5557,6 +6912,27 @@ ${textContent}
         this.showNotification(
           NotificationSeverity.SUCCESS,
           'The link to the prompt template was copied to your clipboard.'
+        );
+      },
+      // error - something went wrong (permissions?)
+      () => {
+        this.showNotification(
+          NotificationSeverity.ERROR,
+          'Something went wrong. Please try again.'
+        );
+      }
+    );
+  },
+
+  // Copy link to gizmo to clipboard
+  async copyGizmoDeepLink(URL) {
+    navigator.clipboard.writeText(URL).then(
+      // successfully copied
+      () => {
+        // Success - copied
+        this.showNotification(
+          NotificationSeverity.SUCCESS,
+          'The link to the GPT was copied to your clipboard.'
         );
       },
       // error - something went wrong (permissions?)
@@ -5801,7 +7177,7 @@ ${textContent}
     }
 
     const textarea = document.querySelector(
-      `textarea:not([name^="${variableIDPrefix}"])`
+      this.Config.getSelectorConfig().PromptTextarea
     );
 
     if (!textarea) {
@@ -5900,7 +7276,7 @@ ${textContent}
                 name="${variableIDPrefix}${promptVariable.ID}"
                 title="${sanitizeInput(promptVariable.Label)}"
                 onchange="AIPRM.promptVariableEnumValueSelected(this)"
-                class="AIPRM__w-full AIPRM__border-0 AIPRM__rounded AIPRM__p-2 AIPRM__mt-1 AIPRM__bg-gray-100 dark:AIPRM__bg-gray-600 dark:AIPRM__border-gray-600 dark:hover:AIPRM__bg-gray-900 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200" required>
+                class="AIPRM__w-full AIPRM__border-0 AIPRM__rounded AIPRM__p-2 AIPRM__mt-1 AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-850 dark:hover:AIPRM__bg-gray-800 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200" required>
                   ${promptVariable.EnumS.slice(
                     0,
                     this.Client.UserQuota.promptVariableEnumMaxSize()
@@ -5929,7 +7305,7 @@ ${textContent}
               rows="1"
               title="${sanitizeInput(promptVariable.Label)}"
               placeholder="${sanitizeInput(promptVariable.Label)}"
-              class="AIPRM__w-full AIPRM__border-0 AIPRM__rounded AIPRM__p-2 AIPRM__mt-1 AIPRM__bg-gray-100 dark:AIPRM__bg-gray-600 dark:AIPRM__border-gray-600 dark:hover:AIPRM__bg-gray-900 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200">${sanitizeInput(
+              class="AIPRM__w-full AIPRM__border-0 AIPRM__rounded AIPRM__p-2 AIPRM__mt-1 AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-850 dark:hover:AIPRM__bg-gray-800 dark:AIPRM__placeholder-gray-400 dark:AIPRM__text-white hover:AIPRM__bg-gray-200">${sanitizeInput(
                 promptVariable.DefaultValue
               )}</textarea>
             `;
@@ -5944,7 +7320,11 @@ ${textContent}
       this.SelectedPromptTemplate = template;
       textarea.focus();
 
-      this.Client.usePrompt(template.ID, UsageTypeNo.CLICK);
+      this.Client.usePrompt(
+        template.ID,
+        UsageTypeNo.CLICK,
+        this.CurrentGizmo?.GizmoCode
+      );
 
       // Update query param AIPRM_PromptID to the selected prompt ID
       if (url.searchParams.get(queryParamPromptID) === template.ID) {
@@ -6107,41 +7487,41 @@ ${textContent}
 
     viewPromptModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
           <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
             <form id="viewPromptForm">
               <div
-              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
               role="dialog" aria-modal="true" aria-labelledby="modal-headline">
           
-                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__overflow-y-auto">
+                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__overflow-y-auto">
                   <label>Prompt Template</label>
-                  <textarea disabled name="Prompt" class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3" style="height: 120px;" required
+                  <textarea disabled name="Prompt" class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3" style="height: 120px;" required
                             placeholder="Prompt text including placeholders [TARGETLANGUAGE] or [PROMPT] replaced automagically by AIPRM"
                             title="Prompt text including placeholders [TARGETLANGUAGE] or [PROMPT] replaced automagically by AIPRM"></textarea>
             
                   <label>Teaser</label>
                   <textarea disabled name="Teaser" required
                     title="Short teaser for this prompt template, e.g. 'Create a keyword strategy and SEO content plan from 1 [KEYWORD]'"
-                    class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3" style="height: 71px;"
+                    class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3" style="height: 71px;"
                     placeholder="Create a keyword strategy and SEO content plan from 1 [KEYWORD]"></textarea>
                     
                   <label>Prompt Hint</label>
                   <input disabled name="PromptHint" required type="text"
                     title="Prompt hint for this prompt template, e.g. '[KEYWORD]' or '[your list of keywords, maximum ca. 8000]"
-                    class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3" placeholder="[KEYWORD] or [your list of keywords, maximum ca. 8000]" />
+                    class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3" placeholder="[KEYWORD] or [your list of keywords, maximum ca. 8000]" />
 
                   <label>Title</label>
                   <input disabled name="Title" type="text" 
-                    title="Short title for this prompt template, e.g. 'Keyword Strategy'" required placeholder="Keyword Strategy" class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2" />
+                    title="Short title for this prompt template, e.g. 'Keyword Strategy'" required placeholder="Keyword Strategy" class="AIPRM__w-full AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2" />
             
                   <div class="AIPRM__flex">
                     <div class="AIPRM__mr-4 AIPRM__w-full">
                       <label>Topic</label>
-                      <select disabled name="Community" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full" required>
+                      <select disabled name="Community" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full" required>
                         ${this.Topics.map(
                           (topic) => /*html*/ `
                               <option value="${sanitizeInput(topic.ID)}" ${
@@ -6153,7 +7533,7 @@ ${textContent}
 
                     <div class="AIPRM__w-full">
                       <label>Activity</label>
-                      <select disabled name="Category" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full" required>
+                      <select disabled name="Category" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full" required>
                         ${this.getActivities(prompt.Community)
                           .map(
                             (activity) => /*html*/ `
@@ -6168,7 +7548,7 @@ ${textContent}
 
                   <div>
                     <label>Made for</label>
-                    <div class="AIPRM__w-full AIPRM__border-gray-500 AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3 AIPRM__border">
+                    <div class="AIPRM__w-full AIPRM__border-gray-500 AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__p-2 AIPRM__mt-2 AIPRM__mb-3 AIPRM__border">
                       ${
                         prompt.ModelS?.length > 0
                           ? prompt.ModelS?.map((modelID) => {
@@ -6202,18 +7582,18 @@ ${textContent}
                     <div class="AIPRM__flex AIPRM__justify-between AIPRM__mt-4">
                       <div class="AIPRM__mr-4 AIPRM__w-full"><label>Author Name</label>
                         <input disabled name="AuthorName" type="text" title="Author Name visible for all users"
-                              placeholder="Author Name" class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
+                              placeholder="Author Name" class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
                       </div>
 
                       <div class="AIPRM__w-full"><label>Author URL</label>
                         <input disabled name="AuthorURL" type="url" title="Author URL visible for all users"
-                              placeholder="https://www.example.com/" class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
+                              placeholder="https://www.example.com/" class="AIPRM__bg-gray-100 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 AIPRM__rounded AIPRM__mb-3 AIPRM__mt-2 AIPRM__p-2 AIPRM__w-full" />
                       </div>
                     </div>                
                   </div>
                 </div>
             
-                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                   <button type="button" class="AIPRM__bg-gray-600 hover:AIPRM__bg-gray-800 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white"
                           onclick="AIPRM.hideViewPromptModal()"> Close
                   </button>
@@ -6266,7 +7646,11 @@ ${textContent}
       }
     }
 
-    this.Client.usePrompt(prompt.ID, UsageTypeNo.VIEW_SOURCE);
+    this.Client.usePrompt(
+      prompt.ID,
+      UsageTypeNo.VIEW_SOURCE,
+      this.CurrentGizmo?.GizmoCode
+    );
 
     await this.showViewPromptModal(idx);
 
@@ -6287,9 +7671,16 @@ ${textContent}
   async forkToPrivatePrompt(idx) {
     const promptOriginal = (await this.getCurrentPromptTemplates())[idx];
 
-    this.Client.usePrompt(promptOriginal.ID, UsageTypeNo.FORK);
+    this.Client.usePrompt(
+      promptOriginal.ID,
+      UsageTypeNo.FORK,
+      this.CurrentGizmo?.GizmoCode
+    );
 
-    await this.showSavePromptModal(new CustomEvent(forkPromptTemplateEvent));
+    await this.showSavePromptModal(
+      new CustomEvent(forkPromptTemplateEvent),
+      promptOriginal.PluginS
+    );
 
     // Pre-fill the prompt template modal with the prompt template
     const form = document.getElementById('savePromptForm');
@@ -6329,7 +7720,10 @@ ${textContent}
   async clonePrompt(idx) {
     const promptOriginal = (await this.getCurrentPromptTemplates())[idx];
 
-    await this.showSavePromptModal(new CustomEvent(clonePromptTemplateEvent));
+    await this.showSavePromptModal(
+      new CustomEvent(clonePromptTemplateEvent),
+      promptOriginal.PluginS
+    );
 
     // Pre-fill the prompt template modal with the cloned prompt template
     const form = document.getElementById('savePromptForm');
@@ -6556,6 +7950,11 @@ ${textContent}
 
     const prompt = (await this.getCurrentPromptTemplates())[idx];
 
+    if (!prompt) {
+      // Gizmo starter prompt
+      return false;
+    }
+
     return await list.has(prompt);
   },
 
@@ -6649,17 +8048,17 @@ ${textContent}
 
     listSelectionModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
           <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
             <form>
               <div
-                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
                 role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
-                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__w-96">
+                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__w-96">
 
                   <input type="hidden" name="promptID" value="${sanitizeInput(
                     prompt.ID
@@ -6670,7 +8069,7 @@ ${textContent}
     }</h3>
 
                   <label class="AIPRM__block">Lists</label>
-                  <select name="listID" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full">
+                  <select name="listID" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full">
                     ${lists
                       .map((list) => {
                         if (
@@ -6720,7 +8119,7 @@ ${textContent}
                     <h3 class="${css`h3`} AIPRM__my-4 AIPRM__mt-6">Create a new list</h3>
                     
                     <label class="AIPRM__block">List Name</label>
-                    <input type="text" name="listName" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full" ${
+                    <input type="text" name="listName" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full" ${
                       !(
                         lists.length ||
                         (prompt.PromptTypeNo !== PromptTypeNo.PRIVATE &&
@@ -6736,7 +8135,7 @@ ${textContent}
                         ? /*html*/ `
                         <label class="AIPRM__text-sm AIPRM__flex AIPRM__items-center" id="savePromptForm-public-checkbox">
                           <input id="createNewListShareWithTeam" name="createNewListShareWithTeam" 
-                            type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-700" 
+                            type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-850" 
                             onchange="AIPRM.toggleCreateNewListSelectTeam();"
                             ${onlyTeamLists ? 'checked disabled' : ''}> 
                           Share with Team
@@ -6745,7 +8144,7 @@ ${textContent}
                         <div id="createNewListSelectTeam" class="${
                           !onlyTeamLists ? 'AIPRM__hidden' : ''
                         }">
-                          <select id="createNewListSelectTeam" name="createNewListSelectTeam" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full">
+                          <select id="createNewListSelectTeam" name="createNewListSelectTeam" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full">
                             ${
                               this.Client.OwnTeamS?.length > 0
                                 ? this.Client.OwnTeamS.map(
@@ -6783,7 +8182,7 @@ ${textContent}
 
                 </div>
 
-                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                   <button type="button" class="AIPRM__bg-gray-600 hover:AIPRM__bg-gray-800 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white"
                           onclick="AIPRM.hideModal('listSelectionModal')"> Cancel
                   </button>
@@ -6989,35 +8388,35 @@ ${textContent}
 
     listCreateModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
           <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
             <form>
               <div
-                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
                 role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
-                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__w-96">
+                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4 AIPRM__w-96">
 
                   <h3 class="${css`h3`} AIPRM__my-4">Create a new list</h3>
 
                     <label class="AIPRM__block">List Name</label>
-                    <input type="text" name="listName" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full" required>
+                    <input type="text" name="listName" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full" required>
 
                     ${
                       this.Client.UserQuota?.hasTeamsFeatureEnabled()
                         ? /*html*/ `
                         <label class="AIPRM__text-sm AIPRM__flex AIPRM__items-center" id="savePromptForm-public-checkbox">
                           <input id="createNewListShareWithTeam" name="createNewListShareWithTeam" 
-                            type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-700" 
+                            type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-850" 
                             onchange="AIPRM.toggleCreateNewListSelectTeam();"> 
                           Share with Team
                         </label>
 
                         <div id="createNewListSelectTeam" class="AIPRM__hidden">
-                          <select id="createNewListSelectTeam" name="createNewListSelectTeam" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-700 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-900 AIPRM__rounded AIPRM__w-full">
+                          <select id="createNewListSelectTeam" name="createNewListSelectTeam" class="AIPRM__mt-2 AIPRM__mb-3 dark:AIPRM__bg-gray-850 dark:AIPRM__border-gray-700 dark:hover:AIPRM__bg-gray-800 AIPRM__rounded AIPRM__w-full">
                             ${
                               this.Client.OwnTeamS?.length > 0
                                 ? this.Client.OwnTeamS.map(
@@ -7043,7 +8442,7 @@ ${textContent}
                     }
                 </div>
 
-                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                   <button type="button" class="AIPRM__bg-gray-600 hover:AIPRM__bg-gray-800 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white"
                           onclick="AIPRM.hideModal('listCreateModal')"> Cancel
                   </button>
@@ -7284,6 +8683,11 @@ ${textContent}
 
     const prompt = (await this.getCurrentPromptTemplates())[idx];
 
+    if (!prompt) {
+      // Gizmo starter prompt
+      return false;
+    }
+
     return await list.has(prompt);
   },
 
@@ -7301,14 +8705,14 @@ ${textContent}
 
     accountModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
           <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
 
             <div
-              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
               role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
                 <div class="AIPRM__border-b dark:AIPRM__border-gray-700 AIPRM__px-6 AIPRM__flex AIPRM__w-full AIPRM__flex-row AIPRM__items-center AIPRM__justify-between">
@@ -7321,7 +8725,7 @@ ${textContent}
                   </button>
                 </div>                
           
-                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__p-4 AIPRM__px-6 AIPRM__overflow-y-auto">
+                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__p-4 AIPRM__px-6 AIPRM__overflow-y-auto">
 
                   <dl class="AIPRM__text-sm">
                     <div class="AIPRM__flex AIPRM__py-4 AIPRM__flex-col sm:AIPRM__flex-row AIPRM__border-b dark:AIPRM__border-gray-700">
@@ -7337,15 +8741,15 @@ ${textContent}
                         ${
                           this.Client.User.IsLinked
                             ? /*html*/ `
-                              <a class="AIPRM__inline-block AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-800 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppAccountURL}" target="_blank">
+                              <a class="AIPRM__inline-block AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-900 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppAccountURL}" target="_blank">
                                 View Account
                               </a>
-                              <button class="AIPRM__block sm:AIPRM__inline-block sm:AIPRM__ml-2 AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-red-500 hover:AIPRM__border-red-700 AIPRM__text-red-500 hover:AIPRM__text-red-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-800 dark:hover:AIPRM__text-red-400 dark:hover:AIPRM__border-red-400" onclick="AIPRM.disconnectAccount()">
+                              <button class="AIPRM__block sm:AIPRM__inline-block sm:AIPRM__ml-2 AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-red-500 hover:AIPRM__border-red-700 AIPRM__text-red-500 hover:AIPRM__text-red-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-900 dark:hover:AIPRM__text-red-400 dark:hover:AIPRM__border-red-400" onclick="AIPRM.disconnectAccount()">
                                 Disconnect
                               </button>
                             `
                             : /*html*/ `
-                              <a class="AIPRM__inline-block AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-800 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppAccountURL}?action=connect" target="_blank">
+                              <a class="AIPRM__inline-block AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-900 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppAccountURL}?action=connect" target="_blank">
                                 Connect
                               </a>
                             `
@@ -7368,7 +8772,7 @@ ${textContent}
                     <div class="AIPRM__flex AIPRM__py-4 AIPRM__flex-col sm:AIPRM__flex-row AIPRM__border-b dark:AIPRM__border-gray-700">
                       <dt class="AIPRM__w-full sm:AIPRM__w-1/2 AIPRM__py-2 AIPRM__font-medium">AIPRM Teams</dt>
                       <dd class="AIPRM__w-full sm:AIPRM__w-1/2 AIPRM__py-2 AIPRM__justify-between">
-                          <a class="AIPRM__inline-block AIPRM__mt-1 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-800 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppTeamURL}" target="_blank">
+                          <a class="AIPRM__inline-block AIPRM__mt-1 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-900 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppTeamURL}" target="_blank">
                             Manage My Teams
                           </a>
                       </dd>
@@ -7381,7 +8785,7 @@ ${textContent}
                           ${this.Client.UserQuota.getMaxPlanLevelLabel()}
                         </div>
 
-                        <a class="AIPRM__inline-block AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-800 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppPricingURL}" target="_blank">
+                        <a class="AIPRM__inline-block AIPRM__mt-4 AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-900 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppPricingURL}" target="_blank">
                           Upgrade
                         </a>
                       </dd>
@@ -7390,7 +8794,7 @@ ${textContent}
                     <div class="AIPRM__flex AIPRM__py-4 AIPRM__flex-col sm:AIPRM__flex-row AIPRM__border-b dark:AIPRM__border-gray-700">
                       <dt class="AIPRM__w-full sm:AIPRM__w-1/2 AIPRM__py-2 AIPRM__font-medium">My Profile Info</dt>
                       <dd class="AIPRM__w-full sm:AIPRM__w-1/2 AIPRM__py-2 AIPRM__justify-between">
-                        <a class="AIPRM__inline-block AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-800 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppAccountURL}#myprofileinfo" target="_blank">
+                        <a class="AIPRM__inline-block AIPRM__bg-white AIPRM__border AIPRM__border-green-500 hover:AIPRM__border-green-700 AIPRM__text-green-500 hover:AIPRM__text-green-700 AIPRM__py-2 AIPRM__px-3 AIPRM__rounded dark:AIPRM__bg-gray-900 dark:hover:AIPRM__text-green-400 dark:hover:AIPRM__border-green-400" href="${AppAccountURL}#myprofileinfo" target="_blank">
                           Manage My Profile Info
                         </a>
                       </dd>
@@ -7400,7 +8804,7 @@ ${textContent}
                       <dt class="AIPRM__w-full sm:AIPRM__w-1/2 AIPRM__py-2 AIPRM__font-medium">Settings</dt>
                       <dd class="AIPRM__w-full sm:AIPRM__w-1/2 AIPRM__py-2 AIPRM__justify-between">
                         <label class="AIPRM__text-sm AIPRM__flex AIPRM__items-center" id="savePromptForm-public-checkbox">
-                          <input id="accountModal-hideWatermark" type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-700" 
+                          <input id="accountModal-hideWatermark" type="checkbox" class="AIPRM__mr-2 dark:AIPRM__bg-gray-850" 
                             onchange="AIPRM.toggleHideAIPRMWatermark()" ${
                               this.getHideWatermark() ? 'checked' : ''
                             }> 
@@ -7557,7 +8961,7 @@ ${textContent}
 
     // Get the prompt textarea input
     const textarea = document.querySelector(
-      `form textarea:not([name^="${variableIDPrefix}"])`
+      this.Config.getSelectorConfig().PromptTextarea
     );
 
     // If there is no textarea, skip
@@ -7572,6 +8976,115 @@ ${textContent}
 
     // Dispatch the input event to trigger the event listeners and enable the "Submit" button
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  },
+
+  /**
+   * submitNewGPT asks for GPT URL first, then will parse Gizmo ID from URL,
+   * call backend API to fetch GPT config and submit new GPT with config via AIPRM API
+   */
+  async submitNewGPT() {
+    // Ask for GPT URL
+    const gptURL = prompt(
+      'Please enter the GPT URL (e.g. https://chat.openai.com/g/g-dq9i42tRO-chatxgb):'
+    );
+
+    // Abort if no URL was entered
+    if (!gptURL) {
+      return;
+    }
+
+    // Parse GPT ID from URL
+    const gptID = gptURL.split('/').pop();
+
+    // Abort if no GPT ID was parsed
+    if (!gptID) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Could not parse GPT ID from URL.'
+      );
+      return;
+    }
+
+    this.storeGPT(gptID);
+  },
+
+  /**
+   * storeGPT calls backend API to fetch GPT config and submits new GPT with config via AIPRM API
+   *
+   * @param {string} gptID
+   */
+  async storeGPT(gptID) {
+    let gptConfig;
+
+    try {
+      // Fetch GPT config from backend API
+      const response = await fetch(
+        `https://chat.openai.com/backend-api/gizmos/${gptID}`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.Client.AccessToken}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Could not fetch GPT config from backend API.');
+      }
+
+      gptConfig = await response.json();
+    } catch (error) {
+      console.error(error);
+
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Could not fetch GPT config from backend API. Please try to reload the page and try again.'
+      );
+      return;
+    }
+
+    // Abort if no GPT config was fetched
+    if (!gptConfig) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Could not fetch GPT config from backend API.'
+      );
+      return;
+    }
+
+    // Submit new GPT with config via API
+    try {
+      await this.Client.submitNewGizmo(gptConfig);
+    } catch (error) {
+      this.showNotification(
+        NotificationSeverity.ERROR,
+        'Could not submit new GPT via API.'
+      );
+      return;
+    }
+
+    // Show thanks notification
+    this.showNotification(
+      NotificationSeverity.SUCCESS,
+      'Thank you for submitting a new GPT!'
+    );
+  },
+
+  // selectGizmo selects a GPT from the list of GPTs using GizmoCode and tracks the event
+  async selectGizmo(GizmoCode) {
+    // Abort if no GizmoCode was passed
+    if (!GizmoCode) {
+      return;
+    }
+
+    // Track the event
+    try {
+      await this.Client.useGizmo(GizmoCode, GizmoVoteTypeNo.VIEW);
+    } catch (error) {
+      console.error('Could not track gizmo view event', error);
+    }
+
+    // Navigate
+    window.location = `/g/${sanitizeInput(GizmoCode)}`;
   },
 };
 

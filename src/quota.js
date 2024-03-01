@@ -261,6 +261,37 @@ let QuotaMessages = {
     <br><br>
     <a class="AIPRM__underline" href="${AppPricingURL}">View available plans here.</a>
   </p>`,
+
+  CONNECT_ACCOUNT_DOCUMENT_INDEX_INCORRECT_PLAN: /*html*/ `
+  <h3>Connect OpenAI and AIPRM Accounts</h3>
+
+  <p class="AIPRM__my-4">
+    You can use Custom Index feature only if you have the <b>AIPRM Elite</b> plan or higher.
+    <br><br>
+    Connect your OpenAI account with your AIPRM account to be able to use Custom Index feature.
+    <br><br>
+    Then you can also upgrade your AIPRM account to a <b>AIPRM Elite</b> plan or higher to use Custom Index feature.
+    <br>
+    <a class="AIPRM__underline" href="${AppPricingURL}">View available plans here.</a>
+  </p>`,
+
+  UPGRADE_ACCOUNT_DOCUMENT_INDEX_INCORRECT_PLAN: /*html*/ `
+  <h3>Upgrade AIPRM Account</h3>
+
+  <p class="AIPRM__my-4">
+    You can use Custom Index feature only if you have the <b>AIPRM Elite</b> plan or higher.
+    <br><br>
+    To be able to use Custom Index feature, you can upgrade your AIPRM account.
+    <br>
+    <a class="AIPRM__underline" href="${AppPricingURL}">View available plans here.</a>
+  </p>`,
+
+  CONNECT_ACCOUNT_USE_REFERRALS: /*html*/ `
+  <h3>Connect OpenAI and AIPRM Accounts</h3>
+
+  <p class="AIPRM__my-4">
+    Connect your OpenAI account with your AIPRM account to be able to use Invite a Friend & Earn feature.
+  </p>`,
 };
 
 // Check user quota for premium features and show modal if quota is exceeded / feature is not available
@@ -697,6 +728,43 @@ export class UserQuota {
     );
   }
 
+  // "Incorrect plan for document index feature" response from API
+  incorrectPlanForDocumentIndexFeature() {
+    if (!this.#user.IsLinked) {
+      this.showModal(
+        QuotaMessages.CONNECT_ACCOUNT_DOCUMENT_INDEX_INCORRECT_PLAN,
+        AppSignupURL
+      );
+
+      return;
+    }
+
+    this.showModal(
+      QuotaMessages.UPGRADE_ACCOUNT_DOCUMENT_INDEX_INCORRECT_PLAN,
+      AppPricingURL
+    );
+  }
+
+  /**
+   * Check if user can use the "Referrals" feature
+   *
+   * @returns {boolean}
+   */
+  canUseReferrals() {
+    if (!this.hasReferralsFeatureEnabled()) {
+      return false;
+    }
+
+    // OpenAI account must be connected to AIPRM account
+    if (!this.#user.IsLinked) {
+      this.showModal(QuotaMessages.CONNECT_ACCOUNT_USE_REFERRALS, AppSignupURL);
+
+      return false;
+    }
+
+    return true;
+  }
+
   /**
    * Check if user can use a custom tone
    *
@@ -840,20 +908,20 @@ export class UserQuota {
 
     quotaMessageModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
           <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
             <div
-              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
+              class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-lg sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all"
               role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
-              <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4">
+              <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4">
                 ${message}
               </div>
 
-              <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+              <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                 <button id="quotaMessageModalCancel" type="button" class="AIPRM__bg-gray-600 hover:AIPRM__bg-gray-800 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white">Cancel</button>
                 <button id="quotaMessageModalSubmit" class="AIPRM__bg-green-600 hover:AIPRM__bg-green-700 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white">Continue</button>
               </div>
@@ -939,5 +1007,13 @@ export class UserQuota {
 
   hasTeamsFeatureEnabled() {
     return this.hasFeatureEnabled(FeatureBitset.TEAMS);
+  }
+
+  hasReferralsFeatureEnabled() {
+    return this.hasFeatureEnabled(FeatureBitset.REFERRALS);
+  }
+
+  hasCustomIndexesFeatureEnabled() {
+    return this.hasFeatureEnabled(FeatureBitset.CUSTOM_INDEXES);
   }
 }

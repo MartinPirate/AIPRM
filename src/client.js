@@ -2,7 +2,7 @@ import { APIEndpoint, APIEndpointAPP } from './config.js';
 
 /* eslint-disable no-unused-vars */
 import {
-  ExternalSystemNo,
+  SystemNo,
   VoteTypeNo,
   SortModeNo,
   FeedbackTypeNo,
@@ -16,6 +16,8 @@ import {
   ListStatusNo,
   ItemStatusNo,
   MemberRoleNo,
+  LicenseWarningLevelNo,
+  GizmoVoteTypeNo,
 } from './enums.js';
 /* eslint-enable */
 
@@ -23,9 +25,9 @@ import { UserQuota } from './quota.js';
 
 import { Reaction } from './rxn.js';
 
-/** @typedef {{MessageID: string, MessageGroupNo: MessageGroupNo, MessageSeverityNo: MessageSeverityNo, MessageStatusNo: MessageStatusNo, MessageSubject: string, MessageBodyHTML: string, OnlyExternalID: string, OnlyExternalSystemNo: ExternalSystemNo, ExpiryTime: string, CreationTime: string}} Message */
+/** @typedef {{MessageID: string, MessageGroupNo: MessageGroupNo, MessageSeverityNo: MessageSeverityNo, MessageStatusNo: MessageStatusNo, MessageSubject: string, MessageBodyHTML: string, OnlyOperatorID: string, OnlySystemNo: SystemNo, ExpiryTime: string, CreationTime: string}} Message */
 
-/** @typedef {{ExternalID: string, ExternalSystemNo: ExternalSystemNo, Email: string, Name: string, UserStatusNo: UserStatusNo, UserLevelNo: UserLevelNo, UserFootprint: string, MaxNewPublicPromptsAllowed: number, MaxNewPrivatePromptsAllowed: number, IsLinked: boolean, FeatureBitset: number}} User */
+/** @typedef {{OperatorID: string, SystemNo: SystemNo, Email: string, Name: string, UserStatusNo: UserStatusNo, UserLevelNo: UserLevelNo, UserFootprint: string, MaxNewPublicPromptsAllowed: number, MaxNewPrivatePromptsAllowed: number, IsLinked: boolean, FeatureBitset: number, LicenseWarning: UserLicenseWarning}} User */
 
 /** @typedef {{Email: string, Name: string}} AppUser */
 
@@ -45,10 +47,13 @@ import { Reaction } from './rxn.js';
 
 /** @typedef {Map<String, UserTeam>} UserTeamM */
 
+/** @typedef {{Message: string, WarningLevelNo: LicenseWarningLevelNo}} UserLicenseWarning */
+
 /**
  * @typedef {object} AIPRMClient
  * @property {string} APIEndpoint
  * @property {User} User
+ * @property {string} AccessToken
  * @property {UserQuota} UserQuota
  * @property {UserTeamM} UserTeamM
  * @property {UserTeam[]} OwnTeamS    // Team where user is owner or admin
@@ -61,6 +66,7 @@ import { Reaction } from './rxn.js';
  * @property {(PromptID: string, Vote: 1|-1) => Promise<Response>} voteForPrompt
  * @property {(PromptID: string, FeedbackTypeNo: FeedbackTypeNo, FeedbackText: string, FeedbackContact: string) => Promise<Response>} reportPrompt
  * @property {(PromptID: string, UsageTypeNo?: UsageTypeNo.CLICK) => Promise<Response>} usePrompt
+ * @property {(UserPrompt: string, PromptPrepared: string, Model: string, VariableNameS: string[], VariableValueS: string[], PromptID?: import('./inject.js').Prompt['ID']) => Promise<{Prompt: string}>} augmentPrompt
  * @property {(PromptID: string) => Promise<void>} deletePrompt
  * @property {(Community: string, SortModeNo?: SortModeNo.TOP_VOTES, Limit?: number, Offset?: number) => Promise<Prompt[]>} getPrompts
  * @property {(Community: string) => Promise<Message[]>} getMessages
@@ -82,6 +88,12 @@ import { Reaction } from './rxn.js';
  * @property {(ListID: string, PromptID: string) => Promise<ListItem>} addToList
  * @property {(ListID: List['ID'], PromptID: import('./inject.js').Prompt['ID']) => Promise<void>} removeFromList
  * @property {(myProfileInfo: string) => Promise<SubPrompt>} createMyProfileInfo
+ * @property {(SortModeNo: SortModeNo) => Promise<Gizmo[]>} getGizmos
+ * @property {(GizmoCode: string, GizmoVoteTypeNo: GizmoVoteTypeNo, GizmoConfig?: Object) => Promise<void>} useGizmo
+ * @property {(GizmoCode: string, GizmoVoteTypeNo: GizmoVoteTypeNo, Vote: 1|-1) => Promise<void>} voteForGizmo
+ * @property {(GizmoConfig: Object) => Promise<void>} submitNewGizmo
+ * @property {() => Promise<import('./referrals.js').ReferralOffer>} fetchReferralOffer
+ * @property {() => Promise<import('./referrals.js').ReferralCode>} fetchReferralCode
  * @property {(response: Response) => Promise<any>} handleResponse
  */
 
@@ -91,6 +103,8 @@ const AIPRMClient = {
 
   /** @type {User} */
   User: null,
+
+  AccessToken: null,
 
   /** @type {UserQuota} */
   UserQuota: null,
@@ -112,8 +126,8 @@ const AIPRMClient = {
         .then((res) => {
           this.User = {
             // Send the anonymous, not identifiable OpenAI hashed user ID to AIPRM to link the user to his own prompts
-            ExternalID: res.user.id,
-            ExternalSystemNo: ExternalSystemNo.OPENAI,
+            OperatorID: res.user.id,
+            SystemNo: SystemNo.OPENAI,
             // So far no reason to send email and name to AIPRM. This may change in the future, but needs consent from the user.
             // Email: res.user.email,
             // Name: res.user.name,
@@ -124,6 +138,8 @@ const AIPRMClient = {
             MaxNewPublicPromptsAllowed: 0,
             IsLinked: false,
           };
+
+          this.AccessToken = res.accessToken;
         })
         // check user status
         .then(() => this.checkUserStatus())
@@ -138,7 +154,7 @@ const AIPRMClient = {
 
     return (
       fetch(
-        `${this.APIEndpoint}/Users/Status?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}`
+        `${this.APIEndpoint}/Users/Status?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}`
       )
         .then(this.handleResponse)
         // set the user status
@@ -219,6 +235,10 @@ const AIPRMClient = {
             }
           }
 
+          if (Object.prototype.hasOwnProperty.call(res, 'LicenseWarning')) {
+            this.User.LicenseWarning = res.LicenseWarning;
+          }
+
           // has Name and Email
           if (
             Object.prototype.hasOwnProperty.call(res, 'Name') &&
@@ -271,7 +291,7 @@ const AIPRMClient = {
     }
 
     return fetch(
-      `${this.APIEndpoint}/Prompts/${PromptID}?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}${paramBasic}`
+      `${this.APIEndpoint}/Prompts/${PromptID}?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}${paramBasic}`
     ).then(this.handleResponse);
   },
 
@@ -280,18 +300,25 @@ const AIPRMClient = {
    *
    * @param {string} PromptID
    * @param {(1|-1)} Vote
+   * @param {string|undefined} GizmoCode
    */
-  voteForPrompt(PromptID, Vote) {
+  voteForPrompt(PromptID, Vote, GizmoCode = undefined) {
+    const body = {
+      VoteTypeNo: VoteTypeNo.PROMPT_TEASER_THUMBS,
+      Vote: Vote,
+      User: this.User,
+    };
+
+    if (GizmoCode) {
+      body.PluginS = [GizmoCode];
+    }
+
     return fetch(`${this.APIEndpoint}/Vote/${PromptID}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        VoteTypeNo: VoteTypeNo.PROMPT_TEASER_THUMBS,
-        Vote: Vote,
-        User: this.User,
-      }),
+      body: JSON.stringify(body),
     }).then(this.handleResponse);
   },
 
@@ -323,16 +350,80 @@ const AIPRMClient = {
    *
    * @param {string} PromptID
    * @param {UsageTypeNo} UsageTypeNo
+   * @param {string|undefined} GizmoCode
    */
-  usePrompt(PromptID, UsageTypeNo = UsageTypeNo.CLICK) {
+  usePrompt(PromptID, UsageTypeNo = UsageTypeNo.CLICK, GizmoCode = undefined) {
+    const body = {
+      UsageTypeNo: UsageTypeNo,
+      User: this.User,
+    };
+
+    if (GizmoCode) {
+      body.PluginS = [GizmoCode];
+    }
+
     return fetch(`${this.APIEndpoint}/Prompts/${PromptID}/Use`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify(body),
+    }).then(this.handleResponse);
+  },
+
+  /**
+   * Augment prompt using AIPRM API endpoint and custom index lookup
+   *
+   * @param {string} UserPrompt
+   * @param {string} PromptPrepared
+   * @param {string} Model
+   * @param {string[]} VariableNameS
+   * @param {string[]} VariableValueS
+   * @param {import('./inject.js').Prompt['ID']?} PromptID
+   * @returns {Promise<{Prompt: string}>} augmented prompt
+   */
+  augmentPrompt(
+    UserPrompt,
+    PromptPrepared,
+    Model,
+    VariableNameS,
+    VariableValueS,
+    PromptID
+  ) {
+
+    if (!this.UserQuota.hasCustomIndexesFeatureEnabled()) {
+      throw new Error('Custom indexes feature is not enabled');
+    }
+
+    console.log(
+      'augmentPrompt',
+      'UserPrompt',
+      UserPrompt,
+      'PromptPrepared',
+      PromptPrepared,
+      'Model',
+      Model,
+      'VariableNameS',
+      VariableNameS,
+      'VariableValueS',
+      VariableValueS,
+      'PromptID',
+      PromptID
+    );
+
+    return fetch(`${this.APIEndpoint}/PromptAugment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
-        UsageTypeNo: UsageTypeNo,
         User: this.User,
+        PromptID,
+        UserPrompt,
+        VariableNameS,
+        VariableValueS,
+        PromptPrepared,
+        Model,
       }),
     }).then(this.handleResponse);
   },
@@ -340,7 +431,7 @@ const AIPRMClient = {
   // delete prompt using AIPRM API endpoint
   deletePrompt(PromptID) {
     return fetch(
-      `${this.APIEndpoint}/Prompts/${PromptID}?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}`,
+      `${this.APIEndpoint}/Prompts/${PromptID}?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}`,
       {
         method: 'DELETE',
         headers: {
@@ -368,7 +459,7 @@ const AIPRMClient = {
     Offset = 0
   ) {
     return fetch(
-      `${this.APIEndpoint}/Prompts?Community=${Community}&Limit=${Limit}&Offset=${Offset}&OwnerExternalID=${this.User.ExternalID}&OwnerExternalSystemNo=${this.User.ExternalSystemNo}&SortModeNo=${SortModeNo}&UserFootprint=${this.User.UserFootprint}&IncludeTeamPrompts=true`
+      `${this.APIEndpoint}/Prompts?Community=${Community}&Limit=${Limit}&Offset=${Offset}&OwnerOperatorID=${this.User.OperatorID}&OwnerSystemNo=${this.User.SystemNo}&SortModeNo=${SortModeNo}&UserFootprint=${this.User.UserFootprint}&IncludeTeamPrompts=true`
     ).then(this.handleResponse);
   },
 
@@ -380,7 +471,7 @@ const AIPRMClient = {
    */
   getMessages(Community) {
     return fetch(
-      `${this.APIEndpoint}/Messages?Community=${Community}&ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}`
+      `${this.APIEndpoint}/Messages?Community=${Community}&OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}`
     ).then(this.handleResponse);
   },
 
@@ -549,7 +640,7 @@ const AIPRMClient = {
     return this.fetchWithToken(`${APIEndpointAPP}/auth/openai/callback`, {
       method: 'POST',
       body: JSON.stringify({
-        ExternalID: this.User.ExternalID,
+        ExternalID: this.User.OperatorID,
       }),
       headers: {
         'Content-Type': 'application/json',
@@ -571,7 +662,7 @@ const AIPRMClient = {
    */
   getLists(hidden = false) {
     return fetch(
-      `${APIEndpoint}/Lists?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}&Hidden=${hidden}`,
+      `${APIEndpoint}/Lists?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}&Hidden=${hidden}`,
       {
         method: 'GET',
         headers: {
@@ -589,7 +680,7 @@ const AIPRMClient = {
    */
   getListDetails(ListID) {
     return fetch(
-      `${APIEndpoint}/List/${ListID}?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}`,
+      `${APIEndpoint}/List/${ListID}?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}`,
       {
         method: 'GET',
         headers: {
@@ -606,7 +697,7 @@ const AIPRMClient = {
    */
   getAllListsWithDetails() {
     return fetch(
-      `${APIEndpoint}/Lists/All/User?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}`,
+      `${APIEndpoint}/Lists/All/User?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}`,
       {
         method: 'GET',
         headers: {
@@ -723,7 +814,7 @@ const AIPRMClient = {
     }
 
     return fetch(
-      `${APIEndpoint}/List/${ListID}?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}&ListTypeNo=${ListTypeNo}${forTeamIDQueryParam}`,
+      `${APIEndpoint}/List/${ListID}?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}&ListTypeNo=${ListTypeNo}${forTeamIDQueryParam}`,
       {
         method: 'DELETE',
         headers: {
@@ -766,7 +857,7 @@ const AIPRMClient = {
    */
   removeFromList(ListID, PromptID) {
     return fetch(
-      `${APIEndpoint}/List/${ListID}/Items/${PromptID}?ExternalID=${this.User.ExternalID}&ExternalSystemNo=${this.User.ExternalSystemNo}&UserFootprint=${this.User.UserFootprint}`,
+      `${APIEndpoint}/List/${ListID}/Items/${PromptID}?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}`,
       {
         method: 'DELETE',
         headers: {
@@ -794,6 +885,99 @@ const AIPRMClient = {
         User: this.User,
       }),
     }).then(this.handleResponse);
+  },
+
+  /**
+   * Fetch the gizmos using AIPRM API endpoint
+   * @param {SortModeNo} SortModeNo
+   * @returns {Promise<Gizmo[]>}
+   */
+  getGizmos(SortModeNo) {
+    return fetch(
+      `${this.APIEndpoint}/Gizmos?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&SortModeNo=${SortModeNo}`
+    ).then(this.handleResponse);
+  },
+
+  /**
+   * Track gizmo usage using AIPRM API endpoint
+   *
+   * @param {string} GizmoCode
+   * @param {GizmoVoteTypeNo} GizmoVoteTypeNo
+   * @param {Object} GizmoConfig
+   */
+  useGizmo(GizmoCode, GizmoVoteTypeNo, GizmoConfig = undefined) {
+    const requestBody = {
+      VoteTypeNo: GizmoVoteTypeNo,
+      Vote: 1,
+      User: this.User,
+    };
+
+    if (GizmoConfig) {
+      requestBody.LogJSON = JSON.stringify(GizmoConfig);
+    }
+
+    return fetch(`${this.APIEndpoint}/Gizmos/${GizmoCode}/Vote`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    }).then(this.handleResponse);
+  },
+
+  /**
+   * Vote for a gizmo using AIPRM API endpoint
+   *
+   * @param {string} GizmoCode
+   * @param {GizmoVoteTypeNo} GizmoVoteTypeNo
+   * @param {1|-1} Vote
+   */
+  voteForGizmo(GizmoCode, GizmoVoteTypeNo, Vote) {
+    return fetch(`${this.APIEndpoint}/Gizmos/${GizmoCode}/Vote`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        VoteTypeNo: GizmoVoteTypeNo,
+        Vote: Vote,
+        User: this.User,
+      }),
+    }).then(this.handleResponse);
+  },
+
+  // Submit new gizmo using AIPRM API endpoint
+  submitNewGizmo(gizmoConfig) {
+    const mybody = JSON.stringify({
+      Gizmo: JSON.stringify(gizmoConfig),
+      User: this.User,
+    });
+
+    return fetch(`${this.APIEndpoint}/Gizmos`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: mybody,
+    }).then(this.handleResponse);
+  },
+
+  /**
+   * Fetch referral offer
+   */
+  fetchReferralOffer() {
+    return fetch(
+      `${this.APIEndpoint}/ReferralOffer?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}`
+    ).then(this.handleResponse);
+  },
+
+  /**
+   * Fetch referral code
+   */
+  fetchReferralCode() {
+    return fetch(
+      `${this.APIEndpoint}/ReferralCode?OperatorID=${this.User.OperatorID}&SystemNo=${this.User.SystemNo}&UserFootprint=${this.User.UserFootprint}&PromoCodeWish=`
+    ).then(this.handleResponse);
   },
 
   /**

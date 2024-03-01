@@ -16,14 +16,38 @@ const NotificationMessageSeverityClassName = {
 };
 
 /**
- * Show the first active and not expired message with MessageSeverityNo.MANDATORY_MUST_CONFIRM (if any)
- * otherwise show the first active and not expired message with other MessageSeverityNo (if any)
+ * Show the first active and not expired static message (if any),
+ * or the first active and not expired message with MessageSeverityNo.MANDATORY_MUST_CONFIRM (if any),
+ * or the first active and not expired message with other MessageSeverityNo (if any)
  *
+ * @param {import("./client").Message[]} staticMessages
  * @param {import("./client").Message[]} messages
  * @param {(MessageID: string)} confirmCallback
  * @param {(MessageID: string, Vote: MessageVoteTypeNo)} voteCallback
+ * @param {(MessageID: string)} readStaticMessageCallback
+ * @returns {boolean} true if a message was shown, false otherwise
  */
-const showMessage = (messages, confirmCallback, voteCallback) => {
+const showMessage = (
+  staticMessages,
+  messages,
+  confirmCallback,
+  voteCallback,
+  readStaticMessageCallback
+) => {
+  // get the first active and not expired static message
+  let staticMessage = staticMessages?.find(
+    (message) =>
+      message.MessageStatusNo === MessageStatusNo.ACTIVE &&
+      (!message.ExpiryTime || new Date(message.ExpiryTime) > new Date())
+  );
+
+  // if there is a static message, show it
+  if (staticMessage) {
+    createNotificationMessage(staticMessage, readStaticMessageCallback);
+
+    return true;
+  }
+
   // get the first active and not expired message with MessageSeverityNo.MANDATORY_MUST_CONFIRM
   let message = messages?.find(
     (message) =>
@@ -36,7 +60,7 @@ const showMessage = (messages, confirmCallback, voteCallback) => {
   if (message) {
     createConfirmMessageModal(message, confirmCallback);
 
-    return;
+    return true;
   }
 
   // otherwise, get the first active and not expired message with other MessageSeverityNo (if any)
@@ -49,10 +73,12 @@ const showMessage = (messages, confirmCallback, voteCallback) => {
 
   // if there is no message, return - otherwise show it
   if (!message) {
-    return;
+    return false;
   }
 
   createNotificationMessage(message, voteCallback);
+
+  return true;
 };
 
 /**
@@ -85,17 +111,17 @@ const createConfirmMessageModal = (message, confirmCallback) => {
 
   confirmMessageModal.innerHTML = /*html*/ `
       <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__text-center AIPRM__transition-opacity AIPRM__z-50">
-        <div class="AIPRM__absolute AIPRM__bg-gray-900 AIPRM__inset-0 AIPRM__opacity-90">
+        <div class="AIPRM__absolute AIPRM__bg-black/50 dark:AIPRM__bg-black/80 AIPRM__inset-0">
         </div>
 
         <div class="AIPRM__fixed AIPRM__inset-0 AIPRM__overflow-y-auto">
           <div class="AIPRM__flex AIPRM__items-center AIPRM__justify-center AIPRM__min-h-full">
             <form>
               <div
-                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-800 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-2xl sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all AIPRM__prose dark:AIPRM__prose-invert"
+                class="AIPRM__align-center AIPRM__bg-white dark:AIPRM__bg-gray-900 dark:AIPRM__text-gray-200 AIPRM__inline-block AIPRM__overflow-hidden sm:AIPRM__rounded-lg AIPRM__shadow-xl sm:AIPRM__align-middle sm:AIPRM__max-w-2xl sm:AIPRM__my-8 sm:AIPRM__w-full AIPRM__text-left AIPRM__transform AIPRM__transition-all AIPRM__prose dark:AIPRM__prose-invert"
                 role="dialog" aria-modal="true" aria-labelledby="modal-headline">
 
-                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-800 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4">
+                <div class="AIPRM__bg-white dark:AIPRM__bg-gray-900 AIPRM__px-4 AIPRM__pt-5 AIPRM__pb-4 sm:AIPRM__p-6 sm:AIPRM__pb-4">
 
                   <h3 class="AIPRM__mt-1 AIPRM__mb-6">${message.MessageSubject}</h3>
 
@@ -107,7 +133,7 @@ const createConfirmMessageModal = (message, confirmCallback) => {
                   </label>
                 </div>
 
-                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-700 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
+                <div class="AIPRM__bg-gray-200 dark:AIPRM__bg-gray-850 AIPRM__px-4 AIPRM__py-3 AIPRM__text-right">
                   <button type="submit" id="reportPromptSubmitButton" class="AIPRM__bg-green-600 hover:AIPRM__bg-green-700 AIPRM__mr-2 AIPRM__px-4 AIPRM__py-2 AIPRM__rounded AIPRM__text-white">Confirm
                   </button>
                 </div>

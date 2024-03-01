@@ -23,7 +23,7 @@ const PromptTypeNo = {
 };
 
 /** @enum {number} */
-const ExternalSystemNo = {
+const SystemNo = {
   UNKNOWN: 0,
   OPENAI: 1,
 };
@@ -74,6 +74,17 @@ const VoteTypeNo = {
   MESSAGE_CONFIRM: 8,
   MESSAGE_LIKE: 16,
   MESSAGE_DISLIKE: 32,
+};
+
+/** @enum {number} */
+const GizmoVoteTypeNo = {
+  UNKNOWN: 0,
+  TEASER_THUMBS: 1,
+  VIEW: 2,
+  USE_ONCE: 4,
+  USE_MESSAGE: 8,
+  USE_STARTERPROMPT: 16,
+  RESULT_THUMBS: 32,
 };
 
 /** @enum {number} */
@@ -201,6 +212,8 @@ const MemberRoleNo = {
 const FeatureBitset = {
   UNKNOWN: 0,
   TEAMS: 1,
+  REFERRALS: 4,
+  CUSTOM_INDEXES: 8
 };
 
 /** @enum {number} */
@@ -214,6 +227,7 @@ const ModelStatusNo = {
   UNKNOWN: 0,
   ACTIVE: 1,
   DEPRECATED: 2,
+  SPECIAL_GIZMO: 4,
 };
 
 /** @enum {string} */
@@ -228,14 +242,22 @@ const CreatePromptMode = {
   ADVANCED: 'advanced',
 };
 
+/** @enum {number} */
+const LicenseWarningLevelNo = {
+  UNKNOWN: 0,
+  WARNING: 1,
+  ERROR: 2,
+};
+
 export {
   PromptTemplatesType,
   NotificationSeverity,
   PromptTypeNo,
-  ExternalSystemNo,
+  SystemNo,
   FeedbackTypeNo,
   UsageTypeNo,
   VoteTypeNo,
+  GizmoVoteTypeNo,
   SortModeNo,
   MessageStatusNo,
   MessageSeverityNo,
@@ -254,4 +276,5 @@ export {
   ModelStatusNo,
   LayoutChangeType,
   CreatePromptMode,
+  LicenseWarningLevelNo,
 };
